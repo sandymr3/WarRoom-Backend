@@ -205,3 +205,26 @@ func (dm *DataManager) GetInvestors() []models.Investor {
 func (dm *DataManager) GetLeaders() []models.Leader {
 	return dm.Config.Leaders
 }
+
+// GetLeader returns a single leader by ID
+func (dm *DataManager) GetLeader(leaderID string) *models.Leader {
+	l, ok := dm.LeaderMap[leaderID]
+	if !ok {
+		return nil
+	}
+	return &l
+}
+
+// GetPhaseTransitionScenario returns the scenario config for a given stage transition.
+func (dm *DataManager) GetPhaseTransitionScenario(fromStage, toStage string) *models.PhaseTransitionScenario {
+	if dm.Config == nil {
+		return nil
+	}
+	for _, pt := range dm.Config.PhaseTransitions {
+		if pt.FromStage == fromStage && pt.ToStage == toStage {
+			s := pt.Scenario
+			return &s
+		}
+	}
+	return nil
+}

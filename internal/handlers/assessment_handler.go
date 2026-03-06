@@ -30,6 +30,35 @@ type SubmitStageResponsesRequest struct {
 	Responses map[string]json.RawMessage `json:"responses"`
 }
 
+// PhaseResponseItem is a single answer from the frontend array format.
+type PhaseResponseItem struct {
+	QuestionID       string         `json:"questionId"`
+	Type             string         `json:"type"`
+	Text             string         `json:"text,omitempty"`
+	SelectedOptionID string         `json:"selectedOptionId,omitempty"`
+	Allocations      map[string]int `json:"allocations,omitempty"`
+}
+
+// PhaseSubmitRequest collects all answers for a full phase.
+type PhaseSubmitRequest struct {
+	StageID   string              `json:"stageId"`
+	Responses []PhaseResponseItem `json:"responses"` // array of response items from frontend
+}
+
+// CharactersRequest for setting chosen mentors/leaders/investors.
+type CharactersRequest struct {
+	SelectedMentors   []string `json:"selectedMentors"`   // 3 mentor IDs
+	SelectedLeaders   []string `json:"selectedLeaders"`   // 3 leader IDs
+	SelectedInvestors []string `json:"selectedInvestors"` // 3 investor IDs
+}
+
+// PhaseScenarioRequest for submitting the leader scenario answer.
+type PhaseScenarioRequest struct {
+	FromStage string `json:"fromStage"`
+	ToStage   string `json:"toStage"`
+	Response  string `json:"response"`
+}
+
 type MentorLifelineRequest struct {
 	MentorID string `json:"mentorId"`
 	Question string `json:"question"`
@@ -257,4 +286,88 @@ func (h *AssessmentHandler) GetReport(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, report)
+}
+
+// ============================================
+// Phase Submit (new v2 flow)
+// ============================================
+
+// POST /assessments/:id/phase-submit
+// Accepts all answers for a phase, auto-scores MCQ, queues AI for open text.
+func (h *AssessmentHandler) SubmitPhase(c echo.Context) error {
+	assessmentID := c.Param("id")
+	req := new(PhaseSubmitRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request: " + err.Error()})
+	}
+
+	// Convert array of responses into map[questionId]json.RawMessage for the service
+	responsesMap := make(map[string]json.RawMessage)
+	for _, r := range req.Responses {
+		raw, _ := json.Marshal(r)
+		responsesMap[r.QuestionID] = raw
+	}
+
+	result, err := h.Service.SubmitPhase(assessmentID, req.StageID, responsesMap)
+	if err != nil {
+		switch err.Error() {
+		case "assessment not found":
+			return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		case "stage mismatch":
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		default:
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to submit phase: " + err.Error()})
+		}
+	}
+
+	return c.JSON(http.StatusOK, result)
+}
+
+// ============================================
+// Character Selection
+// ============================================
+
+// GET /assessments/:id/characters
+func (h *AssessmentHandler) GetCharacters(c echo.Context) error {
+	assessmentID := c.Param("id")
+	chars, err := h.Service.GetCharacters(assessmentID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, chars)
+}
+
+// POST /assessments/:id/characters
+func (h *AssessmentHandler) SetCharacters(c echo.Context) error {
+	assessmentID := c.Param("id")
+	req := new(CharactersRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+	if len(req.SelectedMentors) != 3 || len(req.SelectedLeaders) != 3 || len(req.SelectedInvestors) != 3 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Must select exactly 3 mentors, 3 leaders, and 3 investors"})
+	}
+	if err := h.Service.SetCharacters(assessmentID, req.SelectedMentors, req.SelectedLeaders, req.SelectedInvestors); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, map[string]string{"message": "Characters saved"})
+}
+
+// ============================================
+// Phase Scenario
+// ============================================
+
+// POST /assessments/:id/phase-scenario
+func (h *AssessmentHandler) AnswerPhaseScenario(c echo.Context) error {
+	assessmentID := c.Param("id")
+	req := new(PhaseScenarioRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	result, err := h.Service.AnswerPhaseScenario(assessmentID, req.FromStage, req.ToStage, req.Response)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, result)
 }

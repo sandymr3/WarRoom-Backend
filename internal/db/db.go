@@ -71,9 +71,11 @@ func Connect(cfg *config.Config) {
 		// Actually, just ignore the error for now so the app can start
 		if err := DB.AutoMigrate(
 			&models.User{},
+			&models.Batch{},
 			&models.Assessment{},
 			&models.Stage{},
 			&models.Response{},
+			&models.PhaseScenario{},
 			&models.CompetencyScore{},
 			&models.MentorInteraction{},
 			&models.InvestorScorecard{},

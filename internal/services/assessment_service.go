@@ -38,8 +38,12 @@ func NewAssessmentService(dm *DataManager) *AssessmentService {
 // ============================================
 
 type CreateAssessmentRequest struct {
-	Level    int    `json:"level"` // 1 or 2
-	UserIdea string `json:"userIdea,omitempty"`
+	Level             int      `json:"level"` // 1 or 2
+	UserIdea          string   `json:"userIdea,omitempty"`
+	BatchCode         string   `json:"batchCode,omitempty"`
+	SelectedMentors   []string `json:"selectedMentors,omitempty"`
+	SelectedLeaders   []string `json:"selectedLeaders,omitempty"`
+	SelectedInvestors []string `json:"selectedInvestors,omitempty"`
 }
 
 func (s *AssessmentService) CreateAssessment(userID string, setupData json.RawMessage) (*models.Assessment, error) {
@@ -52,20 +56,46 @@ func (s *AssessmentService) CreateAssessment(userID string, setupData json.RawMe
 		req.Level = 1 // Default to Student level
 	}
 
+	// Batch code — prefer from request, otherwise load from user record
+	batchCode := req.BatchCode
+	if batchCode == "" {
+		var user models.User
+		if err := db.DB.Where("id = ?", userID).First(&user).Error; err == nil {
+			batchCode = user.BatchCode
+		}
+	}
+
 	firstStage := "STAGE_NEG2_IDEATION"
 	firstQ := s.DataManager.GetFirstQuestionInStage(firstStage)
 
 	now := time.Now()
+
+	var mentorsJSON, leadersJSON, investorsJSON json.RawMessage
+	if len(req.SelectedMentors) > 0 {
+		mentorsJSON, _ = json.Marshal(req.SelectedMentors)
+	}
+	if len(req.SelectedLeaders) > 0 {
+		leadersJSON, _ = json.Marshal(req.SelectedLeaders)
+	}
+	if len(req.SelectedInvestors) > 0 {
+		investorsJSON, _ = json.Marshal(req.SelectedInvestors)
+	}
+
 	assessment := &models.Assessment{
 		ID:                       uuid.New().String(),
 		UserID:                   userID,
 		Level:                    req.Level,
 		AttemptNumber:            1,
 		Status:                   "IN_PROGRESS",
+		BatchCode:                batchCode,
+		SelectedMentors:          mentorsJSON,
+		SelectedLeaders:          leadersJSON,
+		SelectedInvestors:        investorsJSON,
 		CurrentStage:             firstStage,
 		CurrentQuestionID:        firstQ,
 		SimulatedMonth:           0,
 		MentorLifelinesRemaining: 3,
+		RevenueProjection:        100000, // Start value ₹1L
 		StartedAt:                &now,
 		LastActiveAt:             &now,
 		FinancialState:           json.RawMessage(`{"capital": 0, "revenue": 0, "burnRate": 0, "runway": 0, "equity": 100, "debt": 0}`),
