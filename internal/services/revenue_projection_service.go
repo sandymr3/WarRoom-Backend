@@ -1,58 +1,30 @@
 package services
 
 import (
-	"encoding/json"
 	"math"
 )
 
 // RevenueProjectionService computes a simulated projected ARR for the leaderboard.
-// Inputs are the assessment's simulation state + latest competency scores.
-// This is NOT a real financial model — it's a simulation metric for engagement.
+// The projection is personalized based on each user's competency scores and
+// average proficiency across all their responses.
 type RevenueProjectionService struct{}
 
 func NewRevenueProjectionService() *RevenueProjectionService {
 	return &RevenueProjectionService{}
 }
 
-type financialState struct {
-	Capital  float64 `json:"capital"`
-	Revenue  float64 `json:"revenue"`
-	BurnRate float64 `json:"burnRate"`
-	Runway   float64 `json:"runway"`
-	Equity   float64 `json:"equity"`
-}
-
-type customerState struct {
-	Count        int     `json:"count"`
-	Retention    float64 `json:"retention"`
-	Satisfaction float64 `json:"satisfaction"`
-}
-
 // ComputeRevenueProjection returns a projected ARR (in currency units as int64).
+//
 // stageIndex: 0–8 (0=ideation … 8=warroom)
-// c4Score, c5Score: weighted average competency scores (1.0–3.0)
-// financialStateJSON / customerStateJSON: raw JSON blobs from Assessment
+// allCompScores: map of competency code → weighted average score (1.0–3.0) across ALL completed stages
+// avgProficiency: average proficiency score across all responses (1.0–3.0)
+// totalResponses: how many questions the user has answered so far
 func (s *RevenueProjectionService) ComputeRevenueProjection(
 	stageIndex int,
-	c4Score, c5Score float64,
-	financialStateJSON, customerStateJSON json.RawMessage,
+	allCompScores map[string]float64,
+	avgProficiency float64,
+	totalResponses int,
 ) int64 {
-	var fin financialState
-	var cust customerState
-
-	if len(financialStateJSON) > 0 {
-		json.Unmarshal(financialStateJSON, &fin)
-	}
-	if len(customerStateJSON) > 0 {
-		json.Unmarshal(customerStateJSON, &cust)
-	}
-
-	// Base: simulate a small SaaS / service business
-	// Price per customer assumed at ₹5,000/yr (adjustable)
-	const pricePerCustomer = 5000.0
-
-	baseRevenue := float64(cust.Count) * pricePerCustomer
-
 	// Stage growth multiplier — revenue potential increases as you progress
 	stageMultipliers := []float64{
 		1.0,  // Ideation
@@ -74,20 +46,45 @@ func (s *RevenueProjectionService) ComputeRevenueProjection(
 	}
 	stageMul := stageMultipliers[idx]
 
-	// Competency multiplier: C4 (financial discipline) and C5 (strategic thinking)
-	// Each scored 1–3; combined normalized to 0.5–1.5 multiplier
-	competencyMul := 0.5 + ((c4Score-1.0)/(3.0-1.0))*0.5 + ((c5Score-1.0)/(3.0-1.0))*0.5
-
-	// Retention bonus: high retention = compounding revenue
-	retentionBonus := 1.0 + (cust.Retention/100.0)*0.5
-
-	projected := baseRevenue * stageMul * competencyMul * retentionBonus
-
-	// Floor: even with 0 customers show some traction signal based on stage
-	floor := stageMul * 100_000 // e.g. ₹1L at stage 1 baseline
-	if projected < floor {
-		projected = floor
+	// Overall competency multiplier from ALL 8 competencies (not just C4/C5).
+	// Each competency is scored 1–3.  Average across those that exist;
+	// missing competencies are treated as the neutral baseline (2.0).
+	compSum := 0.0
+	compCount := 0
+	for _, code := range []string{"C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"} {
+		if score, ok := allCompScores[code]; ok && score > 0 {
+			compSum += score
+			compCount++
+		}
 	}
+	avgComp := 2.0 // neutral baseline
+	if compCount > 0 {
+		avgComp = compSum / float64(compCount)
+	}
+
+	// Map avgComp (1.0–3.0) to a multiplier range (0.4–1.6).
+	// Score 1.0 → 0.4, Score 2.0 → 1.0, Score 3.0 → 1.6
+	competencyMul := 0.4 + (avgComp-1.0)*0.6
+
+	// Proficiency multiplier from the user's average answer quality.
+	// avgProficiency (1–3) mapped to 0.5–1.5
+	if avgProficiency < 1.0 {
+		avgProficiency = 2.0 // default when no responses yet
+	}
+	proficiencyMul := 0.5 + (avgProficiency-1.0)*0.5
+
+	// Engagement multiplier: more questions answered = better traction signal.
+	// Diminishing returns via log; 10 answers ≈ 1.0x, 30 ≈ 1.15x, 60 ≈ 1.25x
+	engagementMul := 1.0
+	if totalResponses > 0 {
+		engagementMul = 1.0 + 0.15*math.Log10(float64(totalResponses))
+	}
+
+	// Base revenue tied to stage (replaces the old customer-count approach
+	// which was always 0). This is the "potential market" unlocked at each stage.
+	baseRevenue := stageMul * 100_000
+
+	projected := baseRevenue * competencyMul * proficiencyMul * engagementMul
 
 	// Cap at a reasonable simulation ceiling
 	projected = math.Min(projected, 500_000_000) // ₹50Cr cap

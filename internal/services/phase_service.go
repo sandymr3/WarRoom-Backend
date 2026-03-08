@@ -236,18 +236,25 @@ func (s *AssessmentService) SubmitPhase(assessmentID string, stageID string, res
 	// 8. Compute stage-level competency scores for this stage
 	stageScores := s.computeStageScores(assessmentID, stageID)
 
-	// 9. Update revenue projection
+	// 9. Update revenue projection using ALL competency scores and proficiency data
 	revSvc := NewRevenueProjectionService()
-	c4Score := stageScores["C4"]
-	c5Score := stageScores["C5"]
-	if c4Score == 0 {
-		c4Score = 2.0
+
+	// Gather cumulative competency scores across all completed stages
+	allCompScores := s.computeAllCompetencyScores(assessmentID)
+	// Merge in current stage scores (they may not be in the DB yet)
+	for code, score := range stageScores {
+		if existing, ok := allCompScores[code]; ok {
+			allCompScores[code] = (existing + score) / 2
+		} else {
+			allCompScores[code] = score
+		}
 	}
-	if c5Score == 0 {
-		c5Score = 2.0
-	}
+
+	// Get average proficiency and total responses for this assessment
+	avgProficiency, totalResponses := s.getAssessmentProficiencyStats(assessmentID)
+
 	stageIndex := stage.StageNumber - 1
-	revenueProjection := revSvc.ComputeRevenueProjection(stageIndex, c4Score, c5Score, assessment.FinancialState, assessment.CustomerState)
+	revenueProjection := revSvc.ComputeRevenueProjection(stageIndex, allCompScores, avgProficiency, totalResponses)
 
 	// 10. Determine next stage
 	nextStageID := s.DataManager.GetNextStageID(stageID)
@@ -352,6 +359,53 @@ func (s *AssessmentService) computeStageScores(assessmentID, stageID string) map
 		result[code] = float64(sum) / float64(len(scores))
 	}
 	return result
+}
+
+// computeAllCompetencyScores returns cumulative weighted average per competency across ALL stages.
+func (s *AssessmentService) computeAllCompetencyScores(assessmentID string) map[string]float64 {
+	var responses []models.Response
+	db.DB.Where("assessmentId = ?", assessmentID).Find(&responses)
+
+	compTotals := map[string][]int{}
+	for _, r := range responses {
+		if r.ProficiencyScore == nil {
+			continue
+		}
+		var comps []string
+		json.Unmarshal(r.CompetenciesAssessed, &comps)
+		for _, c := range comps {
+			compTotals[c] = append(compTotals[c], *r.ProficiencyScore)
+		}
+	}
+
+	result := map[string]float64{}
+	for code, scores := range compTotals {
+		sum := 0
+		for _, v := range scores {
+			sum += v
+		}
+		result[code] = float64(sum) / float64(len(scores))
+	}
+	return result
+}
+
+// getAssessmentProficiencyStats returns the average proficiency and total count of scored responses.
+func (s *AssessmentService) getAssessmentProficiencyStats(assessmentID string) (float64, int) {
+	var responses []models.Response
+	db.DB.Where("assessmentId = ?", assessmentID).Find(&responses)
+
+	sum := 0
+	count := 0
+	for _, r := range responses {
+		if r.ProficiencyScore != nil && *r.ProficiencyScore > 0 {
+			sum += *r.ProficiencyScore
+			count++
+		}
+	}
+	if count == 0 {
+		return 2.0, 0
+	}
+	return float64(sum) / float64(count), count
 }
 
 // buildPhaseScenario creates a unified leader challenge for the phase transition.

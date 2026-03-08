@@ -420,6 +420,17 @@ Respond in valid JSON:
 		eval.BiasTraitScore = 5
 	}
 
+	// Ensure reaction is never empty — the frontend relies on it to advance the flow
+	if strings.TrimSpace(eval.Reaction) == "" {
+		if eval.PrimaryScore >= 4 {
+			eval.Reaction = fmt.Sprintf("That's a strong answer. I like what I'm hearing from you. — %s", investorName)
+		} else if eval.PrimaryScore >= 3 {
+			eval.Reaction = fmt.Sprintf("Fair enough. You've got potential but I need to see more conviction. — %s", investorName)
+		} else {
+			eval.Reaction = fmt.Sprintf("I'm not convinced. You need to do better than that. — %s", investorName)
+		}
+	}
+
 	return &eval, nil
 }
 
