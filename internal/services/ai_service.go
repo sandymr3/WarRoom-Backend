@@ -170,7 +170,10 @@ func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 		return nil, fmt.Errorf("no content in Gemini response")
 	}
 
-	content := result.Candidates[0].Content.Parts[0].Text
+	// Gemini 2.5 "thinking" models return multiple parts: thought + answer.
+	// Always use the LAST text part which contains the actual response.
+	parts := result.Candidates[0].Content.Parts
+	content := parts[len(parts)-1].Text
 	return &AIResponse{Content: content}, nil
 }
 
