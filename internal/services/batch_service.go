@@ -154,7 +154,7 @@ func (s *BatchService) GetBatchParticipants(batchCode string) ([]BatchParticipan
 	code := strings.ToUpper(strings.TrimSpace(batchCode))
 
 	var users []models.User
-	if err := db.DB.Where("batch_code = ? AND role = ?", code, "participant").Order("\"createdAt\" ASC").Find(&users).Error; err != nil {
+	if err := db.DB.Where("batch_code = ? AND role = ?", code, "participant").Order("createdAt ASC").Find(&users).Error; err != nil {
 		return nil, err
 	}
 
@@ -168,8 +168,8 @@ func (s *BatchService) GetBatchParticipants(batchCode string) ([]BatchParticipan
 		}
 		// Get latest assessment for this user in this batch
 		var assessment models.Assessment
-		err := db.DB.Where("\"userId\" = ? AND batch_code = ?", u.ID, code).
-			Order("\"createdAt\" DESC").First(&assessment).Error
+		err := db.DB.Where("userId = ? AND batch_code = ?", u.ID, code).
+			Order("createdAt DESC").First(&assessment).Error
 		if err == nil {
 			dto.AssessmentID = &assessment.ID
 			dto.Status = &assessment.Status
@@ -253,8 +253,8 @@ func (s *BatchService) GetLeaderboard(batchCode string) ([]LeaderboardEntryDTO, 
 	var rows []row
 	err := db.DB.
 		Table("assessments").
-		Select("assessments.\"userId\" as user_id, users.name as user_name, assessments.revenue_projection, assessments.\"currentStage\" as current_stage, assessments.\"userIdea\" as user_idea, assessments.status").
-		Joins("JOIN users ON users.id = assessments.\"userId\"").
+		Select("assessments.userId as user_id, users.name as user_name, assessments.revenue_projection, assessments.currentStage as current_stage, assessments.userIdea as user_idea, assessments.status").
+		Joins("JOIN users ON users.id = assessments.userId").
 		Where("assessments.batch_code = ?", strings.ToUpper(strings.TrimSpace(batchCode))).
 		Order("assessments.revenue_projection DESC").
 		Scan(&rows).Error
