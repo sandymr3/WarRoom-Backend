@@ -4,12 +4,15 @@ import (
 	"database/sql"
 	"log"
 	"net/url"
+	"os"
 	"strings"
 	"war-room-backend/internal/config"
 	"war-room-backend/internal/models"
 
 	"github.com/glebarez/sqlite"
 	"github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	gorm_mysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -87,7 +90,57 @@ func Connect(cfg *config.Config) {
 		} else {
 			log.Println("Database migration completed successfully")
 		}
+
+		// Seed admin user if env vars are set
+		seedAdmin()
 	} else {
 		log.Println("Skipping migrations (RUN_MIGRATIONS != true)")
 	}
+}
+
+func seedAdmin() {
+	email := os.Getenv("ADMIN_EMAIL")
+	password := os.Getenv("ADMIN_PASSWORD")
+	name := os.Getenv("ADMIN_NAME")
+	if email == "" || password == "" {
+		return
+	}
+	if name == "" {
+		name = "Administrator"
+	}
+
+	var existing models.User
+	err := DB.Where("email = ?", email).First(&existing).Error
+	if err == nil {
+		if existing.Role != "admin" {
+			DB.Model(&existing).Update("role", "admin")
+			log.Printf("Updated user %s to admin role", email)
+		} else {
+			log.Printf("Admin user %s already exists, skipping seed", email)
+		}
+		return
+	}
+	if err != gorm.ErrRecordNotFound {
+		log.Printf("Warning: could not check for admin user: %v", err)
+		return
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("Warning: could not hash admin password: %v", err)
+		return
+	}
+
+	admin := models.User{
+		ID:       uuid.New().String(),
+		Email:    email,
+		Password: string(hashed),
+		Name:     name,
+		Role:     "admin",
+	}
+	if err := DB.Create(&admin).Error; err != nil {
+		log.Printf("Warning: could not create admin user: %v", err)
+		return
+	}
+	log.Printf("Admin user created: %s", email)
 }
