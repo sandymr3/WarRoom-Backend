@@ -28,7 +28,7 @@ steps:
       - '--memory'
       - '512Mi'
       - '--set-env-vars'
-      - 'DATABASE_URL=u919113670_admin:Linc%40warroom.123@tcp(193.203.166.76:3306)/u919113670_warroom?parseTime=true&charset=utf8mb4,RUN_MIGRATIONS=true,ADMIN_EMAIL=admin@warroom.com,ADMIN_PASSWORD=admin123,ADMIN_NAME=Administrator'
+      - 'DATABASE_URL=u919113670_admin:Linc%40warroom.123@tcp(193.203.166.76:3306)/u919113670_warroom?parseTime=true&charset=utf8mb4,RUN_MIGRATIONS=true,ADMIN_EMAIL=admin@warroom.com,ADMIN_PASSWORD=admin123,ADMIN_NAME=Administrator,GEMINI_API_KEY=AIzaSyAHuldmyMIOJd7LT_SbjXR5DHie66nKURo,AI_MODEL=gemini-2.5-flash'
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:$COMMIT_SHA'
