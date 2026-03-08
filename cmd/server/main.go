@@ -105,6 +105,9 @@ func main() {
 	// Phase scenario (between stages)
 	protected.POST("/assessments/:id/phase-scenario", assessmentHandler.AnswerPhaseScenario)
 
+	// AI end-of-phase challenge question
+	protected.POST("/assessments/:id/generate-ai-question", assessmentHandler.GenerateAiQuestion)
+
 	// Mentor Lifeline
 	protected.POST("/assessments/:id/mentor", assessmentHandler.UseMentorLifeline)
 

@@ -472,3 +472,55 @@ ORGANIZATIONAL ROLE FIT: %s`, string(compData), string(decisionData), entreprene
 
 	return resp.Content, nil
 }
+
+// ============================================
+// GENERATE LEADER CHALLENGE QUESTION
+// ============================================
+
+// GenerateLeaderChallenge creates an end-of-phase challenge question from a leader
+// based on the participant's stage responses. Returns the question and the leader name.
+func (ai *AIService) GenerateLeaderChallenge(
+	stageID string,
+	responsesSummary string,
+	userIdea string,
+	leaderName string,
+	leaderSpecialization string,
+) (string, error) {
+
+	systemPrompt := fmt.Sprintf(`You are %s, a business leader and evaluator in KK's War Room 2.0 simulation.
+Your specialization: %s
+
+You have just reviewed a founder's decisions during the %s stage of their startup journey.
+Your job is to ask ONE pointed, challenging follow-up question based on their actual decisions.
+
+RULES:
+- Ask exactly ONE question — no preamble, no multiple questions
+- The question must directly challenge or probe a SPECIFIC decision they made
+- Be direct, analytical, and pressure-testing (not aggressive)
+- The question should force them to defend their reasoning
+- Keep the question under 2 sentences
+- Do NOT use generic business clichés
+- Only output the question itself, nothing else`, leaderName, leaderSpecialization, stageID)
+
+	userPrompt := fmt.Sprintf(`Founder's business idea: %s
+
+Their decisions this phase:
+%s
+
+Based on these specific decisions, ask ONE challenging follow-up question.`, userIdea, responsesSummary)
+
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+
+	resp, err := ai.Call(messages)
+	if err != nil {
+		return fmt.Sprintf("Given your decisions this phase, how would you handle a major unexpected setback that challenges your core assumptions about %s?", stageID), nil
+	}
+
+	// Clean up the response (remove quotes if AI wrapped it)
+	question := strings.TrimSpace(resp.Content)
+	question = strings.Trim(question, `"'`)
+	return question, nil
+}

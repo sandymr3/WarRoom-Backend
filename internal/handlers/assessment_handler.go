@@ -371,3 +371,45 @@ func (h *AssessmentHandler) AnswerPhaseScenario(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, result)
 }
+
+// ============================================
+// AI End-of-Phase Question
+// ============================================
+
+type GenerateAiQuestionRequest struct {
+	StageID   string `json:"stageId"`
+	Responses []struct {
+		QuestionID string `json:"questionId"`
+		Summary    string `json:"summary"`
+	} `json:"responses"`
+	UserIdea string `json:"userIdea"`
+}
+
+// POST /assessments/:id/generate-ai-question
+func (h *AssessmentHandler) GenerateAiQuestion(c echo.Context) error {
+	assessmentID := c.Param("id")
+	req := new(GenerateAiQuestionRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	svcReq := &services.GenerateAiQuestionRequest{
+		StageID:  req.StageID,
+		UserIdea: req.UserIdea,
+	}
+	for _, r := range req.Responses {
+		svcReq.Responses = append(svcReq.Responses, struct {
+			QuestionID string `json:"questionId"`
+			Summary    string `json:"summary"`
+		}{QuestionID: r.QuestionID, Summary: r.Summary})
+	}
+
+	result, err := h.Service.GenerateAiQuestion(assessmentID, svcReq)
+	if err != nil {
+		if err.Error() == "assessment not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to generate AI question"})
+	}
+	return c.JSON(http.StatusOK, result)
+}

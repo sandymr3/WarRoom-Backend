@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"war-room-backend/internal/broadcast"
@@ -500,4 +501,87 @@ func (s *AssessmentService) SetCharacters(assessmentID string, mentors, leaders,
 	assessment.SelectedLeaders, _ = json.Marshal(leaders)
 	assessment.SelectedInvestors, _ = json.Marshal(investors)
 	return db.DB.Save(&assessment).Error
+}
+
+// ============================================
+// GENERATE AI END-OF-PHASE QUESTION
+// ============================================
+
+type GenerateAiQuestionRequest struct {
+	StageID   string `json:"stageId"`
+	Responses []struct {
+		QuestionID string `json:"questionId"`
+		Summary    string `json:"summary"`
+	} `json:"responses"`
+	UserIdea string `json:"userIdea"`
+}
+
+type GenerateAiQuestionResult struct {
+	Question   string `json:"question"`
+	LeaderName string `json:"leaderName"`
+}
+
+func (s *AssessmentService) GenerateAiQuestion(assessmentID string, req *GenerateAiQuestionRequest) (*GenerateAiQuestionResult, error) {
+	var assessment models.Assessment
+	if err := db.DB.Where("id = ?", assessmentID).First(&assessment).Error; err != nil {
+		return nil, errors.New("assessment not found")
+	}
+
+	// Pick a leader from the participant's selected leaders
+	var selectedLeaders []string
+	json.Unmarshal(assessment.SelectedLeaders, &selectedLeaders)
+	if len(selectedLeaders) == 0 {
+		selectedLeaders = []string{"indira_nooyi", "jack_ma", "simon_sinek"}
+	}
+
+	// Rotate leader per stage
+	stageData := s.DataManager.GetStage(req.StageID)
+	leaderIdx := 0
+	if stageData != nil {
+		leaderIdx = (stageData.StageNumber - 1) % len(selectedLeaders)
+	}
+	leaderID := selectedLeaders[leaderIdx]
+
+	leader := s.DataManager.GetLeader(leaderID)
+	leaderName := leaderID
+	leaderSpec := "Business Strategy"
+	if leader != nil {
+		leaderName = leader.Name
+		if leader.Specialization != "" {
+			leaderSpec = leader.Specialization
+		}
+	}
+
+	// Build responses summary
+	var summaryLines []string
+	for _, r := range req.Responses {
+		if r.Summary != "" && r.Summary != "(not answered)" {
+			summaryLines = append(summaryLines, fmt.Sprintf("- %s", r.Summary))
+		}
+	}
+	responsesSummary := strings.Join(summaryLines, "\n")
+	if responsesSummary == "" {
+		responsesSummary = "No responses provided."
+	}
+
+	userIdea := req.UserIdea
+	if userIdea == "" {
+		userIdea = assessment.UserIdea
+	}
+
+	question, err := s.AIService.GenerateLeaderChallenge(
+		req.StageID,
+		responsesSummary,
+		userIdea,
+		leaderName,
+		leaderSpec,
+	)
+	if err != nil {
+		question = fmt.Sprintf("Given your decisions this phase, how will you ensure your approach remains sustainable as %s scales?", userIdea)
+	}
+
+	return &GenerateAiQuestionResult{
+		Question:   question,
+		LeaderName: leaderName,
+	}, nil
 }
