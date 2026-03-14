@@ -85,8 +85,9 @@ type SimStage struct {
 	PressureInjected []string      `json:"pressure_injected"`
 	DurationMinutes  int           `json:"duration_minutes"`
 	SimulatedMonths  []int         `json:"simulated_months"`
-	Competencies     []string      `json:"competencies"` // ["C1", "C2"]
-	Questions        []SimQuestion `json:"questions"`
+	Competencies      []string          `json:"competencies"` // ["C1", "C2"]
+	ProficiencyRubric map[string]string `json:"proficiency_rubric,omitempty"` // P1, P2, P3 → description
+	Questions         []SimQuestion     `json:"questions"`
 }
 
 type SimQuestion struct {
@@ -97,6 +98,9 @@ type SimQuestion struct {
 	PressureText string                 `json:"pressure_text,omitempty"`
 	Assess       []string               `json:"assess"` // ["C1", "C2"]
 	Section      string                 `json:"section,omitempty"`
+	Tag          string                 `json:"tag,omitempty"`
+	ScenarioStep string                 `json:"scenario_step,omitempty"` // environment, problem, decision, consequence
+	ScenarioGroup string                `json:"scenario_group,omitempty"`
 	Options      []SimOption            `json:"options,omitempty"`
 	AIEvalPrompt string                 `json:"ai_eval_prompt,omitempty"`
 	ScoringGuide map[string]interface{} `json:"scoring_guide,omitempty"`
