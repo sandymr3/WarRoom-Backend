@@ -1,119 +1,224 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"war-room-backend/internal/db"
 	"war-room-backend/internal/models"
 	"war-room-backend/internal/services"
 
 	"github.com/golang-jwt/jwt/v5"
-    "github.com/google/uuid"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-    "gorm.io/gorm"
+	"gorm.io/gorm"
 )
 
 type AuthHandler struct {
-    AuthService *services.AuthService
+	AuthService *services.AuthService
 }
 
 func NewAuthHandler(as *services.AuthService) *AuthHandler {
-    return &AuthHandler{AuthService: as}
+	return &AuthHandler{AuthService: as}
 }
 
 type RegisterRequest struct {
-    Name     string `json:"name"`
-    Email    string `json:"email"`
-    Password string `json:"password"`
+	Name      string `json:"name"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	BatchCode string `json:"batchCode"`
 }
 
 type LoginRequest struct {
-    Email    string `json:"email"`
-    Password string `json:"password"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+	BatchCode string `json:"batchCode"`
 }
 
 func (h *AuthHandler) Register(c echo.Context) error {
-    req := new(RegisterRequest)
-    if err := c.Bind(req); err != nil {
-        return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
-    }
+	req := new(RegisterRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
 
-    // Check if user exists
-    var existingUser models.User
-    if err := db.DB.Where("email = ?", req.Email).First(&existingUser).Error; err == nil {
-         return c.JSON(http.StatusConflict, map[string]string{"error": "Email already registered"})
-    }
+	// Validate batch code
+	batchCode := strings.ToUpper(strings.TrimSpace(req.BatchCode))
+	if batchCode == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Batch code is required"})
+	}
+	var batch models.Batch
+	if err := db.DB.Where("code = ? AND active = ?", batchCode, true).First(&batch).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid or inactive batch code"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error"})
+	}
 
-    hashedPassword, err := h.AuthService.HashPassword(req.Password)
-    if err != nil {
-        return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Could not hash password"})
-    }
+	// Check if user exists
+	var existingUser models.User
+	if err := db.DB.Where("email = ?", req.Email).First(&existingUser).Error; err == nil {
+		return c.JSON(http.StatusConflict, map[string]string{"error": "Email already registered"})
+	}
 
-    user := models.User{
-        ID:       uuid.New().String(),
-        Name:     req.Name,
-        Email:    req.Email,
-        Password: hashedPassword,
-    }
+	hashedPassword, err := h.AuthService.HashPassword(req.Password)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Could not hash password"})
+	}
 
-    if err := db.DB.Create(&user).Error; err != nil {
-        return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Could not create user"})
-    }
+	user := models.User{
+		ID:        uuid.New().String(),
+		Name:      req.Name,
+		Email:     req.Email,
+		Password:  hashedPassword,
+		BatchCode: batchCode,
+		Role:      "participant",
+	}
 
-    return c.JSON(http.StatusCreated, map[string]string{"message": "User registered successfully"})
+	if err := db.DB.Create(&user).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Could not create user"})
+	}
+
+	return c.JSON(http.StatusCreated, map[string]string{"message": "User registered successfully"})
 }
 
 func (h *AuthHandler) Login(c echo.Context) error {
-    req := new(LoginRequest)
-    if err := c.Bind(req); err != nil {
-        return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
-    }
+	req := new(LoginRequest)
+	if err := c.Bind(req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
 
-    var user models.User
-    if err := db.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
-        if err == gorm.ErrRecordNotFound {
-             return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
-        }
-        return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error"})
-    }
+	// Look up user by email first
+	var user models.User
+	if err := db.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error"})
+	}
 
-    if !h.AuthService.CheckPasswordHash(req.Password, user.Password) {
-        return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
-    }
+	if !h.AuthService.CheckPasswordHash(req.Password, user.Password) {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid credentials"})
+	}
 
-    token, err := h.AuthService.GenerateToken(&user)
-    if err != nil {
-        return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Could not generate token"})
-    }
+	// Admin login: batch code is optional
+	if user.Role == "admin" {
+		token, err := h.AuthService.GenerateToken(&user)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Could not generate token"})
+		}
+		return c.JSON(http.StatusOK, map[string]any{
+			"token": token,
+			"user": map[string]any{
+				"id":    user.ID,
+				"email": user.Email,
+				"name":  user.Name,
+				"role":  user.Role,
+			},
+		})
+	}
 
-    return c.JSON(http.StatusOK, map[string]any{
-        "token": token,
-        "user": map[string]any{
-            "id": user.ID,
-            "email": user.Email,
-            "name": user.Name,
-        },
-    })
+	// Participant login: batch code is required
+	batchCode := strings.ToUpper(strings.TrimSpace(req.BatchCode))
+	if batchCode == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Batch code is required"})
+	}
+	var batch models.Batch
+	if err := db.DB.Where("code = ? AND active = ?", batchCode, true).First(&batch).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid or inactive batch code"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Database error"})
+	}
+
+	if user.BatchCode != batchCode {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Batch code does not match your account"})
+	}
+
+	token, err := h.AuthService.GenerateToken(&user)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Could not generate token"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"token": token,
+		"user": map[string]any{
+			"id":        user.ID,
+			"email":     user.Email,
+			"name":      user.Name,
+			"batchCode": user.BatchCode,
+			"role":      user.Role,
+		},
+		"batch": map[string]any{
+			"code":  batch.Code,
+			"name":  batch.Name,
+			"level": batch.Level,
+		},
+	})
+}
+
+// ============================================
+// Admin Middleware
+// ============================================
+
+// AdminOnly is an Echo middleware that restricts access to admin users.
+// Must be applied AFTER the JWT auth middleware.
+func AdminOnly(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		userToken, ok := c.Get("user").(*jwt.Token)
+		if !ok {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		}
+		claims := userToken.Claims.(jwt.MapClaims)
+		role, _ := claims["role"].(string)
+		if role != "admin" {
+			return c.JSON(http.StatusForbidden, map[string]string{"error": "Admin access required"})
+		}
+		return next(c)
+	}
 }
 
 func (h *AuthHandler) Me(c echo.Context) error {
-    // User is extracted from JWT middleware in protected routes
-    // But this handler might need to be protected.
-    // For now, assume it's used in a protected group or check context.
-    userToken, ok := c.Get("user").(*jwt.Token) // echo-jwt puts token in context "user"
-    if !ok {
-         return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
-    }
-    claims := userToken.Claims.(jwt.MapClaims)
-    userID := claims["user_id"].(string)
+	userToken, ok := c.Get("user").(*jwt.Token)
+	if !ok || userToken == nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+	}
 
-    var user models.User
-    if err := db.DB.First(&user, "id = ?", userID).Error; err != nil {
-        return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
-    }
+	claims, ok := userToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid token claims"})
+	}
 
-    return c.JSON(http.StatusOK, map[string]any{
-        "id": user.ID,
-        "email": user.Email,
-        "name": user.Name,
-    })
+	getClaimString := func(keys ...string) string {
+		for _, key := range keys {
+			if v, exists := claims[key]; exists {
+				switch t := v.(type) {
+				case string:
+					if t != "" {
+						return t
+					}
+				case float64:
+					return fmt.Sprintf("%.0f", t)
+				}
+			}
+		}
+		return ""
+	}
+
+	userID := getClaimString("user_id", "userId", "sub")
+	if userID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized: missing user ID in token"})
+	}
+
+	var user models.User
+	if err := db.DB.First(&user, "id = ?", userID).Error; err != nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "User not found"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"id":        user.ID,
+		"email":     user.Email,
+		"name":      user.Name,
+		"batchCode": user.BatchCode,
+		"role":      user.Role,
+	})
 }

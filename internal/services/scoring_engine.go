@@ -1,7 +1,9 @@
 package services
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"war-room-backend/internal/models"
 )
 
@@ -60,25 +62,30 @@ var StageWeightMatrix = map[string]map[string]int{
 
 // CompetencyResult holds the calculated score for one competency
 type CompetencyResult struct {
-	Code            string             `json:"code"`
-	Name            string             `json:"name"`
-	WeightedAverage float64            `json:"weightedAverage"`
-	Category        string             `json:"category"`
-	StageScores     map[string]int     `json:"stageScores"` // stage -> P-score
-	StageWeights    map[string]int     `json:"stageWeights"` // stage -> weight
-	Evidence        []EvidenceItem     `json:"evidence"`
+	Code            string         `json:"code"`
+	Name            string         `json:"name"`
+	WeightedAverage float64        `json:"weightedAverage"`
+	Category        string         `json:"category"`
+	StageScores     map[string]int `json:"stageScores"`  // stage -> P-score
+	StageWeights    map[string]int `json:"stageWeights"` // stage -> weight
+	Evidence        []EvidenceItem `json:"evidence"`
+	Strengths       []string       `json:"strengths"`  // specific qualitative strengths
+	Weaknesses      []string       `json:"weaknesses"` // specific qualitative weaknesses
+	KeyInsight      string         `json:"keyInsight"` // AI-generated synthesis of why this score
 }
 
 type EvidenceItem struct {
-	Stage       string `json:"stage"`
-	QuestionID  string `json:"questionId"`
-	Proficiency int    `json:"proficiency"`
-	Response    string `json:"response,omitempty"`
+	Stage       string          `json:"stage"`
+	QuestionID  string          `json:"questionId"`
+	Proficiency int             `json:"proficiency"`
+	Response    string          `json:"response,omitempty"`
+	AIEval      json.RawMessage `json:"aiEval,omitempty"` // Added for deeper analysis
 }
 
 // CalculateCompetencyScores calculates weighted average scores for all 8 competencies
 func (se *ScoringEngine) CalculateCompetencyScores(
 	stageScores map[string]map[string][]int, // stage -> competency -> list of P-scores
+	evidence map[string]map[string][]EvidenceItem, // stage -> comp -> items
 ) map[string]*CompetencyResult {
 	results := make(map[string]*CompetencyResult)
 
@@ -96,10 +103,13 @@ func (se *ScoringEngine) CalculateCompetencyScores(
 
 	for code, name := range competencyNames {
 		results[code] = &CompetencyResult{
-			Code:        code,
-			Name:        name,
-			StageScores: make(map[string]int),
+			Code:         code,
+			Name:         name,
+			StageScores:  make(map[string]int),
 			StageWeights: make(map[string]int),
+			Strengths:    []string{},
+			Weaknesses:   []string{},
+			Evidence:     []EvidenceItem{},
 		}
 	}
 
@@ -120,6 +130,35 @@ func (se *ScoringEngine) CalculateCompetencyScores(
 				r.StageScores[stageName] = avgPScore
 				if w, wOk := StageWeightMatrix[stageName][compCode]; wOk {
 					r.StageWeights[stageName] = w
+				}
+			}
+
+			// Aggregate qualitative data from evidence
+			if r, ok := results[compCode]; ok && evidence != nil {
+				if stageEv, ok := evidence[stageName]; ok {
+					if items, ok := stageEv[compCode]; ok {
+						for _, item := range items {
+							r.Evidence = append(r.Evidence, item)
+
+							// Try to parse strengths/weaknesses from AIEval
+							if len(item.AIEval) > 0 {
+								var eval struct {
+									Strengths  []string `json:"strengths"`
+									Weaknesses []string `json:"weaknesses"`
+									Signals    struct {
+										Positive []string `json:"positive"`
+										Negative []string `json:"negative"`
+									} `json:"signals"`
+								}
+								if err := json.Unmarshal(item.AIEval, &eval); err == nil {
+									r.Strengths = append(r.Strengths, eval.Strengths...)
+									r.Strengths = append(r.Strengths, eval.Signals.Positive...)
+									r.Weaknesses = append(r.Weaknesses, eval.Weaknesses...)
+									r.Weaknesses = append(r.Weaknesses, eval.Signals.Negative...)
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -147,24 +186,53 @@ func (se *ScoringEngine) CalculateCompetencyScores(
 			result.WeightedAverage = math.Round(totalWeightedScore/totalWeight*100) / 100
 		}
 		result.Category = ClassifyCompetency(result.WeightedAverage)
+
+		// Deduplicate and prune strengths/weaknesses
+		result.Strengths = uniqueStrings(result.Strengths)
+		result.Weaknesses = uniqueStrings(result.Weaknesses)
+
+		// Simple logic for KeyInsight based on score and trends
+		if result.WeightedAverage >= 2.7 {
+			result.KeyInsight = "Exhibits exceptional mastery. Consistently makes high-impact decisions under pressure."
+		} else if result.WeightedAverage >= 2.0 {
+			result.KeyInsight = "Strong and reliable performance. Minor blind spots exist under extreme stress."
+		} else {
+			result.KeyInsight = "Requires focused development. Performance is inconsistent when dealing with high-stakes scenarios."
+		}
 	}
 
 	return results
+}
+
+func uniqueStrings(input []string) []string {
+	if len(input) == 0 {
+		return []string{}
+	}
+	m := make(map[string]bool)
+	list := []string{}
+	for _, s := range input {
+		s = strings.TrimSpace(s)
+		if s == "" || m[s] {
+			continue
+		}
+		m[s] = true
+		list = append(list, s)
+	}
+	if len(list) > 3 {
+		return list[:3] // Keep only top 3
+	}
+	return list
 }
 
 // ClassifyCompetency maps a weighted average score to a category
 func ClassifyCompetency(avg float64) string {
 	switch {
 	case avg >= 2.7:
-		return "NATURAL_DOMINANT"
-	case avg >= 2.3:
-		return "STRONG"
+		return "P3"
 	case avg >= 2.0:
-		return "FUNCTIONAL"
-	case avg >= 1.6:
-		return "DEVELOPMENT_REQUIRED"
+		return "P2"
 	default:
-		return "HIGH_RISK"
+		return "P1"
 	}
 }
 
@@ -191,9 +259,9 @@ func RankCompetencies(results map[string]*CompetencyResult) []*CompetencyResult 
 // ============================================
 
 type EntrepreneurProfile struct {
-	Type             string   `json:"type"`
-	Description      string   `json:"description"`
-	Interpretation   string   `json:"interpretation"`
+	Type           string `json:"type"`
+	Description    string `json:"description"`
+	Interpretation string `json:"interpretation"`
 }
 
 // ClassifyEntrepreneur determines the entrepreneur type based on competency scores
@@ -265,9 +333,9 @@ func ClassifyEntrepreneur(results map[string]*CompetencyResult) *EntrepreneurPro
 // ============================================
 
 type RoleFit struct {
-	Role                string   `json:"role"`
+	Role                 string   `json:"role"`
 	DominantCompetencies []string `json:"dominantCompetencies"`
-	BestEnvironment     string   `json:"bestEnvironment"`
+	BestEnvironment      string   `json:"bestEnvironment"`
 }
 
 // DetermineRoleFit maps competency profile to organizational roles
@@ -311,17 +379,19 @@ func DetermineRoleFit(ranked []*CompetencyResult) *RoleFit {
 // ============================================
 
 type DealDecisionResult struct {
-	Decision     string  `json:"decision"` // PRIORITY_1, PRIORITY_2, WALK_OUT
-	CapitalOffer float64 `json:"capitalOffer,omitempty"`
-	EquityAsk    float64 `json:"equityAsk,omitempty"`
+	Decision          string  `json:"decision"` // PRIORITY_1, PRIORITY_2, WALK_OUT
+	CapitalOffer      float64 `json:"capitalOffer,omitempty"`
+	EquityAsk         float64 `json:"equityAsk,omitempty"`
 	CapitalAcceptable float64 `json:"capitalAcceptable,omitempty"`
 	EquityAcceptable  float64 `json:"equityAcceptable,omitempty"`
 }
 
 // CalculateDealDecision implements the SOP 2.0 investor deal formula
 // IF (P ≥ 3) AND (B ≥ 3) AND (RedFlag = NO)
-//   IF (P ≥ 4 AND B ≥ 4) → PRIORITY 1
-//   ELSE → PRIORITY 2
+//
+//	IF (P ≥ 4 AND B ≥ 4) → PRIORITY 1
+//	ELSE → PRIORITY 2
+//
 // ELSE → WALK_OUT
 func CalculateDealDecision(primaryScore int, biasTraitScore int, hasRedFlag bool, capitalAsked float64, equityOffered float64) *DealDecisionResult {
 	if hasRedFlag || primaryScore < 3 || biasTraitScore < 3 {
@@ -353,13 +423,13 @@ func CalculateDealDecision(primaryScore int, biasTraitScore int, hasRedFlag bool
 
 // InvestorRedFlagTriggers maps each investor to their walk-out condition
 var InvestorRedFlagTriggers = map[string]string{
-	"kevin_oleary":    "financial_logic_weak",
-	"mark_cuban":      "scalability_weak",
+	"kevin_oleary":     "financial_logic_weak",
+	"mark_cuban":       "scalability_weak",
 	"barbara_corcoran": "emotional_authenticity_weak",
-	"lori_greiner":    "clarity_weak",
-	"steven_bartlett": "identity_unclear",
-	"daymond_john":    "brand_weak",
-	"robert_herjavec": "trust_weak",
+	"lori_greiner":     "clarity_weak",
+	"steven_bartlett":  "identity_unclear",
+	"daymond_john":     "brand_weak",
+	"robert_herjavec":  "trust_weak",
 }
 
 // RedFlagPenalties defines the behavior triggers that cause -1 penalty

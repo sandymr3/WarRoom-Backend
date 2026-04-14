@@ -28,3 +28,14 @@ kk's_war_room_sop
 inspect_db.py
 test_connection.py
 start_server.bat
+migrate_tables.go
+cmd/create_test_data/
+cmd/gen_token/
+create_test_data.go
+gen_token.go
+update_simulation.ps1
+*.sql
+#deployment commit 5
+admin-env.yaml
+cloudbuild-backend.yaml
+cloudbuild*

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // ============================================
@@ -18,14 +19,19 @@ import (
 type AIService struct {
 	APIKey string
 	Model  string
+	client *http.Client
 }
 
 func NewAIService() *AIService {
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	apiKey := firstNonEmpty(
+		os.Getenv("GEMINI_API_KEY"),
+		os.Getenv("GOOGLE_API_KEY"),
+		os.Getenv("GEMINI_API_KEY_TIER1"),
+	)
 
 	model := os.Getenv("AI_MODEL")
 	if model == "" {
-		model = "gemini-2.0-flash-lite-preview-02-05"
+		model = "gemini-2.5-flash"
 	}
 
 	log.Printf("[AIService] Initialized with model: %s, API key set: %v", model, apiKey != "")
@@ -33,7 +39,153 @@ func NewAIService() *AIService {
 	return &AIService{
 		APIKey: apiKey,
 		Model:  model,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
+}
+
+// BatchEvaluateOpenText evaluates multiple open-text responses in a single batched AI call.
+type BatchEvaluationItem struct {
+	QuestionID   string   `json:"questionId"`
+	QuestionText string   `json:"questionText"`
+	ResponseText string   `json:"responseText"`
+	Competencies []string `json:"competencies"`
+}
+
+type BatchEvaluationResult struct {
+	Results []struct {
+		QuestionID string         `json:"questionId"`
+		Evaluation TextEvaluation `json:"evaluation"`
+	} `json:"results"`
+}
+
+func (ai *AIService) BatchEvaluateOpenText(
+	tasks []BatchEvaluationItem,
+	competencyDefinitions map[string]CompetencyDef,
+) (map[string]*TextEvaluation, error) {
+	if len(tasks) == 0 {
+		return map[string]*TextEvaluation{}, nil
+	}
+
+	// 1. Build context
+	relevantComps := make(map[string]bool)
+	for _, t := range tasks {
+		for _, c := range t.Competencies {
+			relevantComps[c] = true
+		}
+	}
+
+	compContext := ""
+	for code := range relevantComps {
+		if def, ok := competencyDefinitions[code]; ok {
+			compContext += fmt.Sprintf("\n%s - %s:\n  Developing (P1): %s\n  Strong (P2): %s\n  Advanced (P3): %s\n",
+				code, def.Name,
+				strings.Join(def.Developing, "; "),
+				strings.Join(def.Strong, "; "),
+				strings.Join(def.Advanced, "; "),
+			)
+		}
+	}
+
+	systemPrompt := fmt.Sprintf(`You are an expert business simulation evaluator for KK's War Room 2.0.
+You evaluate multiple participant responses based on competency rubrics. 
+
+COMPETENCIES BEING ASSESSED:
+%s
+
+SCORING RULES:
+- P1 (Developing/1): The competency is present but inconsistent under pressure. Requires focused development. Key indicators: risk-aversion, lack of strategic depth, poor financial foresight, or inability to manage team morale under stress.
+- P2 (Strong/2): The competency is reliable and functional in most business situations. Key indicators: pragmatic decision-making, clear logic, ability to balance short-term and long-term goals.
+- P3 (Advanced/3): The competency is consistently demonstrated under pressure and supports scalable leadership. Key indicators: identifying non-obvious opportunities, decisive action with incomplete data, excellent resource optimization, and strong visionary leadership.
+
+IDENTIFYING SIGNALS:
+- "Positive Signals": Evidence of mastery, foresight, or efficiency.
+- "Negative Signals": Evidence of oversight, excessive risk, or reactive behavior.
+
+You MUST respond in valid JSON format:
+{
+  "results": [
+    {
+      "questionId": "<qid>",
+      "evaluation": {
+        "proficiency": <1|2|3>,
+        "feedback": "<2-3 sentence assessment>",
+        "reasoning": "<why this proficiency level specifically in relation to the indicators above>",
+        "strengths": ["<specific positive signal identified>"],
+        "weaknesses": ["<specific negative signal identified>"],
+        "signals": {
+          "positive": ["<detailed strength>"],
+          "negative": ["<detailed weakness>"]
+        }
+      }
+    }
+  ]
+}
+
+Be analytical, hyper-focused on the competency rubric, and provide evidence-backed feedback based on their specific response.`, compContext)
+
+	var userPromptBuilder strings.Builder
+	userPromptBuilder.WriteString("Please evaluate the following responses:\n\n")
+	for _, t := range tasks {
+		userPromptBuilder.WriteString(fmt.Sprintf("ID: %s\nQUESTION: %s\nRESPONSE: %s\nCOMPETENCIES: %s\n---\n",
+			t.QuestionID, t.QuestionText, t.ResponseText, strings.Join(t.Competencies, ", ")))
+	}
+
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPromptBuilder.String()},
+	}
+
+	resp, err := ai.Call(messages)
+	if err != nil {
+		log.Printf("[AIService] BatchEvaluateOpenText AI call failed: %v", err)
+		results := make(map[string]*TextEvaluation)
+		for _, t := range tasks {
+			results[t.QuestionID] = &TextEvaluation{Proficiency: 2, Feedback: "Default score due to AI error."}
+		}
+		return results, nil
+	}
+
+	var batchResult BatchEvaluationResult
+	content := resp.Content
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(content[start:end+1]), &batchResult); err != nil {
+			log.Printf("[AIService] BatchEvaluateOpenText unmarshal failed: %v", err)
+		}
+	}
+
+	finalResults := make(map[string]*TextEvaluation)
+	for _, r := range batchResult.Results {
+		// Clamp proficiency
+		if r.Evaluation.Proficiency < 1 {
+			r.Evaluation.Proficiency = 1
+		}
+		if r.Evaluation.Proficiency > 3 {
+			r.Evaluation.Proficiency = 3
+		}
+		finalResults[r.QuestionID] = &r.Evaluation
+	}
+
+	// Ensure all tasks have a result
+	for _, t := range tasks {
+		if _, ok := finalResults[t.QuestionID]; !ok {
+			finalResults[t.QuestionID] = &TextEvaluation{Proficiency: 2, Feedback: "Fallback score."}
+		}
+	}
+
+	return finalResults, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // ChatMessage represents a message in the conversation
@@ -51,8 +203,14 @@ type AIResponse struct {
 // Gemini API types
 // ============================================
 
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"` // base64-encoded
+}
+
 type geminiPart struct {
-	Text string `json:"text"`
+	Text       string            `json:"text,omitempty"`
+	InlineData *geminiInlineData `json:"inlineData,omitempty"`
 }
 
 type geminiContent struct {
@@ -88,8 +246,7 @@ type geminiResponse struct {
 
 func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 	if ai.APIKey == "" {
-		// Fallback mock when no API key
-		return &AIResponse{Content: `{"proficiency": 2, "feedback": "Good response demonstrating foundational understanding.", "reasoning": "Response shows awareness of key concepts."}`}, nil
+		return nil, fmt.Errorf("Gemini API key is not configured (set GEMINI_API_KEY, GOOGLE_API_KEY, or GEMINI_API_KEY_TIER1)")
 	}
 
 	// Build Gemini request from ChatMessage format
@@ -117,7 +274,7 @@ func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 		Contents: contents,
 		GenerationConfig: map[string]interface{}{
 			"temperature":     0.3,
-			"maxOutputTokens": 1024,
+			"maxOutputTokens": 2048,
 		},
 	}
 
@@ -134,32 +291,56 @@ func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", ai.Model, ai.APIKey)
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[AIService] Gemini API error %d: %s", resp.StatusCode, string(respBody))
-		return nil, fmt.Errorf("Gemini API error %d: %s", resp.StatusCode, string(respBody))
-	}
-
+	var respBody []byte
 	var result geminiResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+
+	maxRetries := 3
+	for i := 0; i <= maxRetries; i++ {
+		req, errReq := http.NewRequest("POST", url, bytes.NewBuffer(body))
+		if errReq != nil {
+			return nil, fmt.Errorf("failed to create request: %w", errReq)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, errDo := ai.client.Do(req)
+		if errDo != nil {
+			if i == maxRetries {
+				return nil, fmt.Errorf("API request failed after %d retries: %w", maxRetries, errDo)
+			}
+			log.Printf("[AIService] Attempt %d failed: %v. Retrying...", i+1, errDo)
+			time.Sleep(time.Duration(1<<i) * time.Second)
+			continue
+		}
+
+		respBody, errDo = io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if errDo != nil {
+			if i == maxRetries {
+				return nil, fmt.Errorf("failed to read response after %d retries: %w", maxRetries, errDo)
+			}
+			log.Printf("[AIService] Attempt %d failed to read response. Retrying...", i+1)
+			time.Sleep(time.Duration(1<<i) * time.Second)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			errMsg := fmt.Sprintf("Gemini API error %d: %s", resp.StatusCode, string(respBody))
+			// Retry on 429 Too Many Requests or 500+ Server Errors
+			if (resp.StatusCode == 429 || resp.StatusCode >= 500) && i < maxRetries {
+				log.Printf("[AIService] Retryable error on attempt %d: %s", i+1, errMsg)
+				time.Sleep(time.Duration(1<<i) * time.Second)
+				continue
+			}
+			log.Printf("[AIService] %s", errMsg)
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+
+		if errUnmarshal := json.Unmarshal(respBody, &result); errUnmarshal != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", errUnmarshal)
+		}
+
+		break // Success, exit retry loop
 	}
 
 	if result.Error != nil {
@@ -170,8 +351,321 @@ func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 		return nil, fmt.Errorf("no content in Gemini response")
 	}
 
-	content := result.Candidates[0].Content.Parts[0].Text
+	// Gemini 2.5 "thinking" models return multiple parts: thought + answer.
+	// Always use the LAST text part which contains the actual response.
+	parts := result.Candidates[0].Content.Parts
+	content := parts[len(parts)-1].Text
 	return &AIResponse{Content: content}, nil
+}
+
+// ============================================
+// CALL WITH AUDIO - Gemini Inline Audio
+// ============================================
+
+func (ai *AIService) CallWithAudio(systemPrompt string, userText string, audioBase64 string, audioMimeType string) (*AIResponse, error) {
+	if ai.APIKey == "" {
+		return nil, fmt.Errorf("Gemini API key is not configured")
+	}
+
+	// Build parts: audio inline data + text prompt
+	userParts := []geminiPart{
+		{
+			InlineData: &geminiInlineData{
+				MimeType: audioMimeType,
+				Data:     audioBase64,
+			},
+		},
+		{Text: userText},
+	}
+
+	gemReq := geminiRequest{
+		Contents: []geminiContent{
+			{Role: "user", Parts: userParts},
+		},
+		GenerationConfig: map[string]interface{}{
+			"temperature":     0.3,
+			"maxOutputTokens": 4096,
+		},
+	}
+
+	if systemPrompt != "" {
+		gemReq.SystemInstruction = &geminiContent{
+			Parts: []geminiPart{{Text: systemPrompt}},
+		}
+	}
+
+	body, err := json.Marshal(gemReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", ai.Model, ai.APIKey)
+
+	var respBody []byte
+	var result geminiResponse
+
+	maxRetries := 3
+	for i := 0; i <= maxRetries; i++ {
+		req, errReq := http.NewRequest("POST", url, bytes.NewBuffer(body))
+		if errReq != nil {
+			return nil, fmt.Errorf("failed to create request: %w", errReq)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, errDo := ai.client.Do(req)
+		if errDo != nil {
+			if i == maxRetries {
+				return nil, fmt.Errorf("API request failed after %d retries: %w", maxRetries, errDo)
+			}
+			log.Printf("[AIService] Audio call attempt %d failed: %v. Retrying...", i+1, errDo)
+			time.Sleep(time.Duration(1<<i) * time.Second)
+			continue
+		}
+
+		respBody, errDo = io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if errDo != nil {
+			if i == maxRetries {
+				return nil, fmt.Errorf("failed to read response after %d retries: %w", maxRetries, errDo)
+			}
+			time.Sleep(time.Duration(1<<i) * time.Second)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			errMsg := fmt.Sprintf("Gemini API error %d: %s", resp.StatusCode, string(respBody))
+			if (resp.StatusCode == 429 || resp.StatusCode >= 500) && i < maxRetries {
+				log.Printf("[AIService] Retryable error on attempt %d: %s", i+1, errMsg)
+				time.Sleep(time.Duration(1<<i) * time.Second)
+				continue
+			}
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+
+		if errUnmarshal := json.Unmarshal(respBody, &result); errUnmarshal != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", errUnmarshal)
+		}
+
+		break
+	}
+
+	if result.Error != nil {
+		return nil, fmt.Errorf("Gemini error: %s", result.Error.Message)
+	}
+
+	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("no content in Gemini audio response")
+	}
+
+	parts := result.Candidates[0].Content.Parts
+	content := parts[len(parts)-1].Text
+	return &AIResponse{Content: content}, nil
+}
+
+// ============================================
+// ANALYZE PITCH AUDIO
+// ============================================
+
+type PitchAudioAnalysis struct {
+	Transcription string   `json:"transcription"`
+	Feedback      string   `json:"feedback"`
+	Strengths     []string `json:"strengths"`
+	Weaknesses    []string `json:"weaknesses"`
+	OverallScore  int      `json:"overallScore"` // 1-10
+	Clarity       int      `json:"clarity"`      // 1-5
+	Confidence    int      `json:"confidence"`   // 1-5
+	Persuasion    int      `json:"persuasion"`   // 1-5
+}
+
+func (ai *AIService) AnalyzePitchAudio(audioBase64 string, mimeType string) (*PitchAudioAnalysis, error) {
+	systemPrompt := `You are an expert investor panel evaluator for KK's War Room 2.0 business simulation.
+You are listening to a founder's investment pitch. Your task is to:
+1. Transcribe the spoken audio accurately
+2. Evaluate the pitch quality
+
+Respond in valid JSON:
+{
+  "transcription": "<exact transcription of what was said>",
+  "feedback": "<2-3 sentence overall assessment of the pitch>",
+  "strengths": ["<strength1>", "<strength2>"],
+  "weaknesses": ["<weakness1>", "<weakness2>"],
+  "overallScore": <1-10>,
+  "clarity": <1-5 how clear and structured>,
+  "confidence": <1-5 how confident the speaker sounds>,
+  "persuasion": <1-5 how persuasive the pitch is>
+}
+
+EVALUATION CRITERIA:
+- Problem-Solution clarity: Did they clearly state the problem and their solution?
+- Market understanding: Do they know their target customer?
+- Differentiation: What makes them unique vs competitors?
+- Traction/Validation: Did they mention any proof of concept?
+- The Ask: Did they clearly state how much capital and for what equity?
+- Delivery: Confidence, pace, clarity of speech
+
+Be analytical and honest. If the audio is unclear or too short, note that in feedback.
+If the audio only contains silence, background noise, or is too short to contain coherent speech, YOU MUST strictly return "[No speech detected]" for the transcription and set all scores to 1. DO NOT invent, hallucinate, or auto-generate filler text (such as "thank you", "hello", etc.).`
+
+	userText := "Listen to this founder's investment pitch and provide your analysis."
+
+	resp, err := ai.CallWithAudio(systemPrompt, userText, audioBase64, mimeType)
+	if err != nil {
+		log.Printf("[AIService] AnalyzePitchAudio failed: %v", err)
+		return &PitchAudioAnalysis{
+			Transcription: "[Audio analysis failed]",
+			Feedback:      "Unable to analyze pitch audio at this time.",
+			Strengths:     []string{},
+			Weaknesses:    []string{},
+			OverallScore:  5,
+			Clarity:       3,
+			Confidence:    3,
+			Persuasion:    3,
+		}, nil
+	}
+
+	var analysis PitchAudioAnalysis
+	content := resp.Content
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start >= 0 && end > start {
+		if err := json.Unmarshal([]byte(content[start:end+1]), &analysis); err != nil {
+			log.Printf("[AIService] AnalyzePitchAudio parse error: %v", err)
+			return &PitchAudioAnalysis{
+				Transcription: content,
+				Feedback:      "Response received but could not be parsed.",
+				OverallScore:  5,
+			}, nil
+		}
+	}
+
+	// Clamp scores
+	if analysis.OverallScore < 1 {
+		analysis.OverallScore = 1
+	}
+	if analysis.OverallScore > 10 {
+		analysis.OverallScore = 10
+	}
+	if analysis.Clarity < 1 {
+		analysis.Clarity = 1
+	}
+	if analysis.Clarity > 5 {
+		analysis.Clarity = 5
+	}
+	if analysis.Confidence < 1 {
+		analysis.Confidence = 1
+	}
+	if analysis.Confidence > 5 {
+		analysis.Confidence = 5
+	}
+	if analysis.Persuasion < 1 {
+		analysis.Persuasion = 1
+	}
+	if analysis.Persuasion > 5 {
+		analysis.Persuasion = 5
+	}
+
+	return &analysis, nil
+}
+
+// ============================================
+// ANALYZE INVESTOR RESPONSE AUDIO
+// ============================================
+
+type InvestorResponseAudioAnalysis struct {
+	Transcription  string   `json:"transcription"`
+	PrimaryScore   int      `json:"primary_score"`
+	BiasTraitScore int      `json:"bias_trait_score"`
+	RedFlags       []string `json:"red_flags"`
+	Reaction       string   `json:"reaction"`
+}
+
+func (ai *AIService) AnalyzeInvestorResponseAudio(
+	audioBase64 string,
+	mimeType string,
+	investorName string,
+	investorLens string,
+	biasTraitName string,
+	question string,
+) (*InvestorResponseAudioAnalysis, error) {
+
+	systemPrompt := fmt.Sprintf(`You are %s, an investor on KK's War Room panel.
+Your primary lens: %s
+Your bias trait to evaluate: %s
+
+You asked the founder: "%s"
+
+Now listen to their spoken response. Your task is to:
+1. Transcribe their spoken response accurately
+2. Evaluate it as %s would
+
+RED FLAG triggers (each causes -1 penalty):
+- Blames others for failures
+- Avoids or deflects the question
+- Overuse of hype language without substance
+- Defensive or aggressive tone
+- Contradictions detected in their story
+
+Respond in valid JSON:
+{
+  "transcription": "<exact transcription of what was said>",
+  "primary_score": <1-5 how well they answered>,
+  "bias_trait_score": <1-5 how well they demonstrate %s>,
+  "red_flags": ["<flag1>"] or [],
+  "reaction": "<2-3 sentence in-character reaction as %s>"
+}
+
+If the audio only contains silence, background noise, or is too short to contain coherent speech, YOU MUST strictly return "[No speech detected]" for the transcription and set all scores to 1. DO NOT invent, hallucinate, or auto-generate filler text (such as "thank you", "hello", etc.).`,
+		investorName, investorLens, biasTraitName, question, investorName, biasTraitName, investorName)
+
+	userText := fmt.Sprintf("Listen to this founder's response to %s's question and evaluate it.", investorName)
+
+	resp, err := ai.CallWithAudio(systemPrompt, userText, audioBase64, mimeType)
+	if err != nil {
+		log.Printf("[AIService] AnalyzeInvestorResponseAudio failed: %v", err)
+		return &InvestorResponseAudioAnalysis{
+			Transcription:  "[Audio analysis failed]",
+			PrimaryScore:   3,
+			BiasTraitScore: 3,
+			RedFlags:       []string{},
+			Reaction:       "I need to think about this.",
+		}, nil
+	}
+
+	var analysis InvestorResponseAudioAnalysis
+	content := resp.Content
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start >= 0 && end > start {
+		json.Unmarshal([]byte(content[start:end+1]), &analysis)
+	}
+
+	// Clamp scores
+	if analysis.PrimaryScore < 1 {
+		analysis.PrimaryScore = 1
+	}
+	if analysis.PrimaryScore > 5 {
+		analysis.PrimaryScore = 5
+	}
+	if analysis.BiasTraitScore < 1 {
+		analysis.BiasTraitScore = 1
+	}
+	if analysis.BiasTraitScore > 5 {
+		analysis.BiasTraitScore = 5
+	}
+
+	// Ensure reaction is never empty
+	if strings.TrimSpace(analysis.Reaction) == "" {
+		if analysis.PrimaryScore >= 4 {
+			analysis.Reaction = fmt.Sprintf("That's a strong answer. I like what I'm hearing. — %s", investorName)
+		} else if analysis.PrimaryScore >= 3 {
+			analysis.Reaction = fmt.Sprintf("Fair enough. You've got potential but I need more. — %s", investorName)
+		} else {
+			analysis.Reaction = fmt.Sprintf("I'm not convinced. You need to do better. — %s", investorName)
+		}
+	}
+
+	return &analysis, nil
 }
 
 // ============================================
@@ -179,11 +673,17 @@ func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 // ============================================
 
 type TextEvaluation struct {
-	Proficiency int      `json:"proficiency"` // 1=P1, 2=P2, 3=P3
-	Feedback    string   `json:"feedback"`
-	Reasoning   string   `json:"reasoning"`
-	Strengths   []string `json:"strengths"`
-	Weaknesses  []string `json:"weaknesses"`
+	Proficiency int                `json:"proficiency"` // 1=P1, 2=P2, 3=P3
+	Feedback    string             `json:"feedback"`
+	Reasoning   string             `json:"reasoning"`
+	Strengths   []string           `json:"strengths"`
+	Weaknesses  []string           `json:"weaknesses"`
+	Signals     *EvaluationSignals `json:"signals,omitempty"`
+}
+
+type EvaluationSignals struct {
+	Positive []string `json:"positive"`
+	Negative []string `json:"negative"`
 }
 
 func (ai *AIService) EvaluateOpenText(
@@ -417,6 +917,17 @@ Respond in valid JSON:
 		eval.BiasTraitScore = 5
 	}
 
+	// Ensure reaction is never empty — the frontend relies on it to advance the flow
+	if strings.TrimSpace(eval.Reaction) == "" {
+		if eval.PrimaryScore >= 4 {
+			eval.Reaction = fmt.Sprintf("That's a strong answer. I like what I'm hearing from you. — %s", investorName)
+		} else if eval.PrimaryScore >= 3 {
+			eval.Reaction = fmt.Sprintf("Fair enough. You've got potential but I need to see more conviction. — %s", investorName)
+		} else {
+			eval.Reaction = fmt.Sprintf("I'm not convinced. You need to do better than that. — %s", investorName)
+		}
+	}
+
 	return &eval, nil
 }
 
@@ -471,4 +982,393 @@ ORGANIZATIONAL ROLE FIT: %s`, string(compData), string(decisionData), entreprene
 	}
 
 	return resp.Content, nil
+}
+
+// ============================================
+// GENERATE LEADER CHALLENGE QUESTION
+// ============================================
+
+// GenerateLeaderChallenge creates an end-of-phase challenge question from a leader
+// based on the participant's stage responses. Returns the question and the leader name.
+func (ai *AIService) GenerateLeaderChallenge(
+	stageID string,
+	responsesSummary string,
+	userIdea string,
+	leaderName string,
+	leaderSpecialization string,
+) (string, error) {
+
+	systemPrompt := fmt.Sprintf(`You are %s, a business leader and evaluator in KK's War Room 2.0 simulation.
+Your specialization: %s
+
+You have just reviewed a founder's decisions during the %s stage of their startup journey.
+Your job is to ask ONE pointed, challenging follow-up question based on their actual decisions.
+
+RULES:
+- Ask exactly ONE question — no preamble, no multiple questions
+- The question must directly challenge or probe a SPECIFIC decision they made
+- Be direct, analytical, and pressure-testing (not aggressive)
+- The question should force them to defend their reasoning
+- Keep the question under 2 sentences
+- Do NOT use generic business clichés
+- Only output the question itself, nothing else`, leaderName, leaderSpecialization, stageID)
+
+	userPrompt := fmt.Sprintf(`Founder's business idea: %s
+
+Their decisions this phase:
+%s
+
+Based on these specific decisions, ask ONE challenging follow-up question.`, userIdea, responsesSummary)
+
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+
+	resp, err := ai.Call(messages)
+	if err != nil {
+		return fmt.Sprintf("Given your decisions this phase, how would you handle a major unexpected setback that challenges your core assumptions about %s?", stageID), nil
+	}
+
+	// Clean up the response (remove quotes if AI wrapped it)
+	question := strings.TrimSpace(resp.Content)
+	question = strings.Trim(question, `"'`)
+	return question, nil
+}
+
+// ============================================
+// GENERATE DETAILED POST-SIMULATION ANALYSIS
+// ============================================
+
+// GenerateDetailedAnalysis creates a comprehensive AI report analyzing the participant's
+// GenerateDetailedAnalysis produces a multi-section narrative analysis of the
+// entire simulation journey — what went well, what went wrong, and improvement areas.
+func (ai *AIService) GenerateDetailedAnalysis(
+	competencyRanking []map[string]interface{},
+	responseSummaries string,
+	investorSummary string,
+	entrepreneurType string,
+	roleFit string,
+	userIdea string,
+	simState map[string]interface{},
+) (string, error) {
+
+	systemPrompt := `You are an expert business coach and venture capital partner evaluating a founder's performance in "KK's War Room 2.0".
+You have reviewed a founder's complete simulation journey — every decision, investor interaction, competency score, and final business state.
+
+Generate a HIGH-LEVEL STRATEGIC EVALUATION report in the following format. Use clear headings and bullet points.
+
+## Executive Summary
+- Brief 2-3 sentence overview of the founder's overall performance and business viability.
+
+## What You Did Well (Strategic Strengths)
+- 3-5 specific strengths based on their decisions, scores, and business outcomes.
+- Reference specific metrics (Revenue, Team growth, Product stage) if they confirm the success.
+
+## Critical Mistakes & Blind Spots
+- 3-5 specific mistakes referencing actual decisions or poor metric outcomes (e.g., high expenses, poor capital management).
+- Be brutally honest but growth-oriented.
+
+## Financial & Growth Evaluation
+- Analyze their final business state: Revenue vs Expenses, Capital remaining, and the quality of their Budget Allocations.
+- Was the business model sustainable by the end?
+
+## Competency Deep Dive (The Gaps)
+- For each competency scored below 2.5, explain WHY it was low based on their specific responses and decision patterns.
+
+## Role Fit & Next Steps
+- Explain why the identified role (e.g., CEO, COO, Product) matches their decision patterns.
+- Suggest 3 concrete real-world actions to bridge their largest competency gap.
+
+## Final Verdict
+- A closing statement on whether this founder is "Investor Ready", "Growth Ready", or "Needs Co-founder Support".
+
+RULES:
+- Be hyper-specific. Reference actual decisions, investor reactions (e.g. "Kevin O'Leary walked out because..."), and final metrics.
+- Use the second person ("You").
+- Use professional yet encouraging "Venture Partner" tone.
+- Total length: 700-1000 words.
+- Format with clean Markdown.`
+
+	stateJSON, _ := json.MarshalIndent(simState, "", "  ")
+
+	userPrompt := fmt.Sprintf(`Founder's Business Idea: %s
+Entrepreneur Type: %s
+Recommended Role: %s
+
+Final Business State (JSON):
+%s
+
+Competency Rankings:
+%s
+
+Key Decisions & Responses:
+%s
+
+Investor Interactions:
+%s
+
+Based on all this data, provide a comprehensive evaluation.`, userIdea, entrepreneurType, roleFit, string(stateJSON), formatRankings(competencyRanking), responseSummaries, investorSummary)
+
+	messages := []ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+
+	resp, err := ai.Call(messages)
+	if err != nil {
+		return "Detailed analysis could not be generated at this time.", err
+	}
+
+	return strings.TrimSpace(resp.Content), nil
+}
+
+// ============================================
+// GENERATE DYNAMIC SCENARIO (MCQ)
+// ============================================
+
+type DynamicScenarioResponse struct {
+	Question string `json:"question"`
+	Options  []struct {
+		Text        string      `json:"text"`
+		Proficiency interface{} `json:"proficiency"` // 1, 2, or 3 (can be string or int)
+		Feedback    string      `json:"feedback"`
+	} `json:"options"`
+}
+
+func (ai *AIService) GenerateDynamicScenario(
+	questionContext string,
+	stageGoal string,
+	researchBackground string,
+	competencies []string,
+	competencyDefinitions map[string]CompetencyDef,
+	previousResponses string,
+	userIdea string,
+	leaderName string,
+) (*DynamicScenarioResponse, error) {
+
+	// Build competency context
+	compContext := ""
+	for _, code := range competencies {
+		if def, ok := competencyDefinitions[code]; ok {
+			compContext += fmt.Sprintf("\n%s - %s:\n  Developing (P1): %s\n  Strong (P2): %s\n  Advanced (P3): %s\n",
+				code, def.Name,
+				strings.Join(def.Developing, "; "),
+				strings.Join(def.Strong, "; "),
+				strings.Join(def.Advanced, "; "),
+			)
+		}
+	}
+
+	previousResponses = truncateForLog(previousResponses, 2400)
+
+	var scenario DynamicScenarioResponse
+	var lastParseErr error
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		systemPrompt := fmt.Sprintf(`You are an expert business simulation designer for KK's War Room 2.0.
+Your task is to generate a REAL-WORLD SIMULATION SCENARIO based on the participant's business journey.
+
+SCENARIO SLOT:
+%s
+
+CURRENT STAGE GOAL:
+%s
+
+RESEARCH BACKGROUND:
+%s
+
+COMPETENCIES TO ANALYZE:
+%s
+
+PARTICIPANT'S BUSINESS:
+%s
+
+PREVIOUS DECISIONS SUMMARY:
+%s
+
+RULES:
+1. Generate ONE challenging, realistic business scenario related to the current stage goal that directly resulted from the participant's previous decisions.
+2. The scenario MUST be presented as being asked directly by the leader: %s, speaking in their authentic voice and tone.
+3. EXPLICITLY reference their specific past decisions and overall performance from previous phases in the scenario description. Do NOT use a generic prefix. The leader should naturally weave the consequences of the user's actual past decisions into the new challenge.
+4. End the scenario with an engaging question from the leader like: "How will you handle this?" or "What's your next move?"
+5. Provide exactly FOUR options.
+6. Each option MUST include proficiency 1, 2, or 3 (at least one option for each level across all four).
+7. Keep output concise: question <= 300 chars, each option text <= 140 chars, each feedback <= 120 chars.
+8. Return ONLY valid, complete, and compact JSON that directly represents the DynamicScenarioResponse structure. No markdown, no code fences, no extra text, no wrapping JSON objects.
+
+EXAMPLE OF EXPECTED JSON OUTPUT:
+{
+  "question": "A critical challenge has emerged...",
+  "options": [
+    {
+      "text": "Option 1 Text",
+      "proficiency": 3,
+      "feedback": "Feedback for option 1"
+    },
+    {
+      "text": "Option 2 Text",
+      "proficiency": 2,
+      "feedback": "Feedback for option 2"
+    },
+    {
+      "text": "Option 3 Text",
+      "proficiency": 1,
+      "feedback": "Feedback for option 3"
+    },
+    {
+      "text": "Option 4 Text",
+      "proficiency": 2,
+      "feedback": "Feedback for option 4"
+    }
+  ]
+}`, questionContext, stageGoal, researchBackground, compContext, userIdea, previousResponses, leaderName)
+
+		userPrompt := "Return ONLY the JSON object as specified in the rules and example."
+		if attempt > 1 {
+			userPrompt = "Previous output was malformed or truncated. Return ONLY the complete and valid JSON object for DynamicScenarioResponse. No markdown, no backticks, no extra text, no wrapping JSON objects."
+		}
+
+		messages := []ChatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		}
+
+		resp, err := ai.Call(messages)
+		if err != nil {
+			return nil, err
+		}
+
+		scenario, lastParseErr = parseDynamicScenarioResponse(resp.Content)
+		if lastParseErr == nil {
+			break
+		}
+
+		log.Printf("[AIService] Dynamic scenario parse attempt %d failed: %v", attempt, lastParseErr)
+		if attempt == 3 {
+			return nil, lastParseErr
+		}
+	}
+
+	// Validation: Ensure we have options
+	if len(scenario.Options) == 0 {
+		return nil, fmt.Errorf("AI generated zero options")
+	}
+	if len(scenario.Options) != 4 {
+		return nil, fmt.Errorf("AI must generate exactly 4 options, got %d", len(scenario.Options))
+	}
+
+	for i := range scenario.Options {
+		// Convert interface{} proficiency to int safely
+		profInt := 2 // Default to 2
+		switch v := scenario.Options[i].Proficiency.(type) {
+		case float64:
+			profInt = int(v)
+		case string:
+			if strings.Contains(v, "1") {
+				profInt = 1
+			}
+			if strings.Contains(v, "3") {
+				profInt = 3
+			}
+		case int:
+			profInt = v
+		}
+
+		// Clamp
+		if profInt < 1 {
+			profInt = 1
+		}
+		if profInt > 3 {
+			profInt = 3
+		}
+
+		// Update back the modified struct to int
+		scenario.Options[i].Proficiency = profInt
+	}
+
+	return &scenario, nil
+}
+
+func parseDynamicScenarioResponse(content string) (DynamicScenarioResponse, error) {
+	var scenario DynamicScenarioResponse
+
+	cleaned := stripMarkdownCodeBlocks(content)
+
+	// Find the outermost JSON object by balancing curly braces
+	startIndex := -1
+	endIndex := -1
+	braceCount := 0
+
+	for i, r := range cleaned {
+		if r == '{' {
+			if startIndex == -1 {
+				startIndex = i // Found the first opening brace
+			}
+			braceCount++
+		} else if r == '}' {
+			braceCount--
+			if braceCount == 0 && startIndex != -1 {
+				endIndex = i // Found the matching closing brace for the first opening one
+				break
+			}
+		}
+	}
+
+	if startIndex == -1 || endIndex == -1 {
+		return scenario, fmt.Errorf("unstructured AI response: no complete JSON object found: %s", truncateForLog(cleaned, 200))
+	}
+
+	jsonStr := cleaned[startIndex : endIndex+1]
+	if err := json.Unmarshal([]byte(jsonStr), &scenario); err != nil {
+		return scenario, fmt.Errorf("failed to parse AI scenario JSON: %w for content: %s", err, truncateForLog(jsonStr, 200))
+	}
+
+	return scenario, nil
+}
+
+func formatRankings(rankings []map[string]interface{}) string {
+	var lines []string
+	for _, r := range rankings {
+		lines = append(lines, fmt.Sprintf("- %s (%s): %.2f — %s",
+			r["code"], r["name"], r["weightedAverage"], r["category"]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func stripMarkdownCodeBlocks(content string) string {
+	// Look for ```json...``` or ```...``` blocks
+	jsonStart := strings.Index(content, "```json")
+	if jsonStart >= 0 {
+		// Found markdown json block
+		endIdx := strings.Index(content[jsonStart+7:], "```")
+		if endIdx >= 0 {
+			// Extract content between ```json and ```
+			return strings.TrimSpace(content[jsonStart+7 : jsonStart+7+endIdx])
+		}
+		// No closing fence, strip prefix and continue
+		return strings.TrimSpace(content[jsonStart+7:])
+	}
+
+	// Look for generic markdown blocks
+	if strings.Contains(content, "```") {
+		start := strings.Index(content, "```")
+		if start >= 0 {
+			end := strings.Index(content[start+3:], "```")
+			if end >= 0 {
+				return strings.TrimSpace(content[start+3 : start+3+end])
+			}
+			// No closing fence, strip opening fence and return remainder
+			return strings.TrimSpace(content[start+3:])
+		}
+	}
+
+	return strings.TrimSpace(content)
+}
+
+func truncateForLog(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
 }

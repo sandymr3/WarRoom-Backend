@@ -1,0 +1,36 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:$COMMIT_SHA', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:latest', '.']
+
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:$COMMIT_SHA']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:latest']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud run deploy warroom-backend \
+          --image us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:$COMMIT_SHA \
+          --region us-central1 \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 8080 \
+          --memory 512Mi \
+          --update-env-vars "RUN_MIGRATIONS=$_RUN_MIGRATIONS,AI_MODEL=$_AI_MODEL"
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/warroom-repo/backend:latest'
+
+substitutions:
+  _RUN_MIGRATIONS: 'false'
+  _AI_MODEL: 'gemini-2.5-flash'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

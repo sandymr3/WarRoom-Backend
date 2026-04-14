@@ -103,6 +103,15 @@ func (dm *DataManager) GetQuestion(questionID string) *models.SimQuestion {
 	return &q
 }
 
+func (dm *DataManager) GetQuestionByText(text string) *models.SimQuestion {
+	for _, q := range dm.QuestionMap {
+		if q.Text == text {
+			return &q
+		}
+	}
+	return nil
+}
+
 // GetFirstQuestionInStage returns the first question ID for a stage
 func (dm *DataManager) GetFirstQuestionInStage(stageID string) string {
 	stage, ok := dm.StageMap[stageID]
@@ -149,6 +158,16 @@ func (dm *DataManager) GetNextQuestionID(currentQID string, selectedOptionID str
 
 // GetNextStageID returns the next stage in the simulation flow
 func (dm *DataManager) GetNextStageID(currentStageID string) string {
+	// 1. Check for specific phase transitions in config (for branching)
+	if dm.Config != nil {
+		for _, pt := range dm.Config.PhaseTransitions {
+			if pt.FromStage == currentStageID && pt.ToStage != "RESTART_OR_CONTINUE" {
+				return pt.ToStage
+			}
+		}
+	}
+
+	// 2. Fallback to default linear order
 	for i, sid := range dm.StageOrder {
 		if sid == currentStageID && i+1 < len(dm.StageOrder) {
 			return dm.StageOrder[i+1]
@@ -204,4 +223,27 @@ func (dm *DataManager) GetInvestors() []models.Investor {
 // GetLeaders returns all available leaders
 func (dm *DataManager) GetLeaders() []models.Leader {
 	return dm.Config.Leaders
+}
+
+// GetLeader returns a single leader by ID
+func (dm *DataManager) GetLeader(leaderID string) *models.Leader {
+	l, ok := dm.LeaderMap[leaderID]
+	if !ok {
+		return nil
+	}
+	return &l
+}
+
+// GetPhaseTransitionScenario returns the scenario config for a given stage transition.
+func (dm *DataManager) GetPhaseTransitionScenario(fromStage, toStage string) *models.PhaseTransitionScenario {
+	if dm.Config == nil {
+		return nil
+	}
+	for _, pt := range dm.Config.PhaseTransitions {
+		if pt.FromStage == fromStage && pt.ToStage == toStage {
+			s := pt.Scenario
+			return &s
+		}
+	}
+	return nil
 }

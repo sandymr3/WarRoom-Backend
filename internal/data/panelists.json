@@ -6,13 +6,24 @@
     "category": "mentor",
     "primaryLens": "Founder Psychology",
     "avatar": "👩‍🏫",
-    "characteristics": ["Empathetic", "Insightful", "Patient"],
-    "challengeQuestions": ["How does this align with your values?", "Are you taking care of yourself?"],
-    "triggers": ["Burnout signs", "Ego"],
+    "characteristics": [
+      "Empathetic",
+      "Insightful",
+      "Patient"
+    ],
+    "challengeQuestions": [
+      "How does this align with your values?",
+      "Are you taking care of yourself?"
+    ],
+    "triggers": [
+      "Burnout signs",
+      "Ego"
+    ],
     "guidanceStyle": "Coaching",
     "tone": "warm",
     "bio": "Sarah has coached over 500 founders through the highs and lows of startup life.",
-    "remarks": {}
+    "remarks": {},
+    "gender": "female"
   },
   {
     "id": "p2",
@@ -21,13 +32,24 @@
     "category": "investor",
     "primaryLens": "ROI & Scalability",
     "avatar": "🦈",
-    "characteristics": ["Direct", "Data-driven", "Impatient"],
-    "challengeQuestions": ["What's the CAC?", "How does this scale to $100M?"],
-    "triggers": ["Vague numbers", "Small market"],
+    "characteristics": [
+      "Direct",
+      "Data-driven",
+      "Impatient"
+    ],
+    "challengeQuestions": [
+      "What's the CAC?",
+      "How does this scale to $100M?"
+    ],
+    "triggers": [
+      "Vague numbers",
+      "Small market"
+    ],
     "guidanceStyle": "Direct",
     "tone": "skeptical",
     "bio": "Marcus manages a $500M fund and only invests in potential unicorns.",
-    "remarks": {}
+    "remarks": {},
+    "gender": "male"
   },
   {
     "id": "p3",
@@ -36,28 +58,50 @@
     "category": "leader",
     "primaryLens": "Execution & Culture",
     "avatar": "👩‍💼",
-    "characteristics": ["Strategic", "Operational", "Ethical"],
-    "challengeQuestions": ["Who is on your team?", "What is your operating cadence?"],
-    "triggers": ["Bad hiring", "Lack of process"],
+    "characteristics": [
+      "Strategic",
+      "Operational",
+      "Ethical"
+    ],
+    "challengeQuestions": [
+      "Who is on your team?",
+      "What is your operating cadence?"
+    ],
+    "triggers": [
+      "Bad hiring",
+      "Lack of process"
+    ],
     "guidanceStyle": "Mentoring",
     "tone": "analytical",
     "bio": "Elena scaled her SaaS company to IPO and focuses on building strong organizations.",
-    "remarks": {}
+    "remarks": {},
+    "gender": "female"
   },
-    {
+  {
     "id": "p4",
     "name": "David Design",
     "role": "Product Leader",
     "category": "mentor",
     "primaryLens": "User Experience",
     "avatar": "👨‍🎨",
-    "characteristics": ["Creative", "User-centric", "Perfectionist"],
-    "challengeQuestions": ["Do users actually want this?", "Is it delightful?"],
-    "triggers": ["Bad UI", "Ignoring user feedback"],
+    "characteristics": [
+      "Creative",
+      "User-centric",
+      "Perfectionist"
+    ],
+    "challengeQuestions": [
+      "Do users actually want this?",
+      "Is it delightful?"
+    ],
+    "triggers": [
+      "Bad UI",
+      "Ignoring user feedback"
+    ],
     "guidanceStyle": "Teaching",
     "tone": "optimistic",
     "bio": "David believes design is the competitive advantage of the 21st century.",
-    "remarks": {}
+    "remarks": {},
+    "gender": "male"
   },
   {
     "id": "p5",
@@ -66,13 +110,24 @@
     "category": "investor",
     "primaryLens": "Unit Economics",
     "avatar": "🕴️",
-    "characteristics": ["Calculated", "Risk-averse", "Efficient"],
-    "challengeQuestions": ["When do you break even?", "What are your margins?"],
-    "triggers": ["High burn rate", "Unnecessary spending"],
+    "characteristics": [
+      "Calculated",
+      "Risk-averse",
+      "Efficient"
+    ],
+    "challengeQuestions": [
+      "When do you break even?",
+      "What are your margins?"
+    ],
+    "triggers": [
+      "High burn rate",
+      "Unnecessary spending"
+    ],
     "guidanceStyle": "Critical",
     "tone": "blunt",
     "bio": "Ivan made his fortune in logistics and hates waste.",
-    "remarks": {}
+    "remarks": {},
+    "gender": "male"
   },
   {
     "id": "p6",
@@ -81,12 +136,23 @@
     "category": "leader",
     "primaryLens": "Systems & Process",
     "avatar": "📋",
-    "characteristics": ["Organized", "Process-oriented", "Reliable"],
-    "challengeQuestions": ["Is this repeatable?", "Where is the documentation?"],
-    "triggers": ["Chaos", "Ad-hoc decisions"],
+    "characteristics": [
+      "Organized",
+      "Process-oriented",
+      "Reliable"
+    ],
+    "challengeQuestions": [
+      "Is this repeatable?",
+      "Where is the documentation?"
+    ],
+    "triggers": [
+      "Chaos",
+      "Ad-hoc decisions"
+    ],
     "guidanceStyle": "Structured",
     "tone": "calm",
     "bio": "Olivia turns chaotic startups into well-oiled machines.",
-    "remarks": {}
+    "remarks": {},
+    "gender": "female"
   }
 ]

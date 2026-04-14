@@ -8,7 +8,7 @@ import (
 
 func HealthCheck(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
-		"status": "ok",
+		"status":  "ok",
 		"message": "War Room Backend is running",
 	})
 }

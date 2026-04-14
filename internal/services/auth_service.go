@@ -10,11 +10,11 @@ import (
 )
 
 type AuthService struct {
-    Config *config.Config
+	Config *config.Config
 }
 
 func NewAuthService(cfg *config.Config) *AuthService {
-    return &AuthService{Config: cfg}
+	return &AuthService{Config: cfg}
 }
 
 func (s *AuthService) HashPassword(password string) (string, error) {
@@ -29,8 +29,10 @@ func (s *AuthService) CheckPasswordHash(password, hash string) bool {
 
 func (s *AuthService) GenerateToken(user *models.User) (string, error) {
 	claims := jwt.MapClaims{
-		"user_id": user.ID,
+		"userId":  user.ID, // User ID for modern UI needs
+		"user_id": user.ID, // legacy fallback for existing backend handlers
 		"email":   user.Email,
+		"role":    user.Role,
 		"exp":     time.Now().Add(time.Hour * 72).Unix(),
 	}
 
