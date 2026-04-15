@@ -62,15 +62,34 @@ type DemoFollowupScenario struct {
 	Context  string `json:"context"`
 }
 
-type CompetencyScore struct {
-	Trait string `json:"trait"`
-	Score int    `json:"score"`
+type DemoActionItem struct {
+	Competency string `json:"competency"`
+	Action     string `json:"action"`
+	TargetDate string `json:"targetDate"`
+}
+
+type DemoRoleFitMap struct {
+	Role                 string   `json:"role"`
+	BestEnvironment      string   `json:"bestEnvironment"`
+	DominantCompetencies []string `json:"dominantCompetencies"`
+}
+
+type DemoCompetencyScore struct {
+	Code     string `json:"code"`
+	Trait    string `json:"trait"`
+	Score    int    `json:"score"`
+	Category string `json:"category"`
 }
 
 type CompetencyReport struct {
-	OverallScore int               `json:"overallScore"`
-	Summary      string            `json:"summary"`
-	Competencies []CompetencyScore `json:"competencies"`
+	OverallScore       int                   `json:"overallScore"`
+	Summary            string                `json:"summary"`
+	EntrepreneurType   string                `json:"entrepreneurType"`
+	OrganizationalRole string                `json:"organizationalRole"`
+	ArchetypeNarrative string                `json:"archetypeNarrative"`
+	Competencies       []DemoCompetencyScore `json:"competencies"`
+	RoleFitMap         DemoRoleFitMap        `json:"roleFitMap"`
+	ActionPlan         []DemoActionItem      `json:"actionPlan"`
 }
 
 // ============================================
@@ -578,19 +597,42 @@ There are exactly 5 competencies to evaluate:
 "Problem Sensing", "Financial Discipline", "Strategic Thinking", "Power & Influence", "Value Creation".
 
 For each, provide a score from 1-10.
+Assign a "code" (C1 to C5) to each competency.
+Assign a "category" based on the score:
+- 1-3: "HIGH_RISK"
+- 4-5: "DEVELOPMENT_REQUIRED"
+- 6-7: "FUNCTIONAL"
+- 8-9: "STRONG"
+- 10: "NATURAL_DOMINANT"
+
 Calculate the overall average score (1-10).
 Provide a 2-3 sentence overall summary of their founder profile.
+Identify their specific "entrepreneurType" (e.g., Visionary, Operator, Hustler, etc.) and "organizationalRole" (e.g., CEO, COO, Product Lead).
+Write a short "archetypeNarrative" describing their style constraint.
+Provide an "actionPlan" with 2-3 actionable steps to improve.
+Provide a "roleFitMap" detailing their ideal role and best environment.
 
 You MUST respond in valid JSON:
 {
   "overallScore": 8,
   "summary": "<2-3 sentence breakdown>",
+  "entrepreneurType": "Visionary Builder",
+  "organizationalRole": "Product-Focused CEO",
+  "archetypeNarrative": "<short paragraph describing their natural dominant archetype>",
   "competencies": [
-    {"trait": "Problem Sensing", "score": 8},
-    {"trait": "Financial Discipline", "score": 7},
-    {"trait": "Strategic Thinking", "score": 9},
-    {"trait": "Power & Influence", "score": 6},
-    {"trait": "Value Creation", "score": 8}
+    {"code": "C1", "trait": "Problem Sensing", "score": 8, "category": "STRONG"},
+    {"code": "C2", "trait": "Financial Discipline", "score": 7, "category": "FUNCTIONAL"},
+    {"code": "C3", "trait": "Strategic Thinking", "score": 9, "category": "STRONG"},
+    {"code": "C4", "trait": "Power & Influence", "score": 6, "category": "FUNCTIONAL"},
+    {"code": "C5", "trait": "Value Creation", "score": 8, "category": "STRONG"}
+  ],
+  "roleFitMap": {
+    "role": "Chief Executive Officer",
+    "bestEnvironment": "High-growth, product-led environments.",
+    "dominantCompetencies": ["Strategic Thinking", "Problem Sensing"]
+  },
+  "actionPlan": [
+    {"competency": "Financial Discipline", "action": "Implement a stricter budgeting process.", "targetDate": "Next 30 Days"}
   ]
 }`
 
