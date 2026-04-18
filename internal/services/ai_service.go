@@ -95,9 +95,16 @@ COMPETENCIES BEING ASSESSED:
 %s
 
 SCORING RULES:
-- P1 (Developing/1): The competency is present but inconsistent under pressure. Requires focused development. Key indicators: risk-aversion, lack of strategic depth, poor financial foresight, or inability to manage team morale under stress.
-- P2 (Strong/2): The competency is reliable and functional in most business situations. Key indicators: pragmatic decision-making, clear logic, ability to balance short-term and long-term goals.
-- P3 (Advanced/3): The competency is consistently demonstrated under pressure and supports scalable leadership. Key indicators: identifying non-obvious opportunities, decisive action with incomplete data, excellent resource optimization, and strong visionary leadership.
+- P1 (Developing/1): Clear competency gaps or risky reasoning likely to fail in real execution.
+- P2 (Strong/2): Competency is demonstrated with workable logic and practical trade-offs in typical business conditions.
+- P3 (Advanced/3): Competency is demonstrated with strategic depth, clear execution mechanics, and strong pressure-handling.
+
+CALIBRATION RULES:
+- Start from P2 as the baseline for a coherent, relevant answer.
+- Move to P1 only when there is explicit evidence of harmful gaps, weak logic, or avoidance of the question.
+- Move to P3 only when there is explicit evidence of advanced strategic thinking plus concrete execution detail.
+- Do not penalize concise answers if they are logically sound and directly answer the prompt.
+- Use only evidence present in the response; avoid assumptions.
 
 IDENTIFYING SIGNALS:
 - "Positive Signals": Evidence of mastery, foresight, or efficiency.
@@ -713,9 +720,15 @@ COMPETENCIES BEING ASSESSED:
 %s
 
 SCORING RULES:
-- P1 (Developing/1): The competency is present but inconsistent under pressure. Requires focused development.
-- P2 (Strong/2): The competency is reliable and functional in most business situations.
-- P3 (Advanced/3): The competency is consistently demonstrated under pressure and supports scalable leadership.
+- P1 (Developing/1): Clear competency gaps or risky logic that would weaken real execution.
+- P2 (Strong/2): Competency is demonstrated with practical and coherent reasoning in normal business conditions.
+- P3 (Advanced/3): Competency is demonstrated with strong strategic depth and concrete execution clarity under pressure.
+
+CALIBRATION RULES:
+- Begin from P2 for any coherent and relevant response.
+- Downgrade to P1 only when clear evidence shows weak reasoning, critical omissions, or harmful trade-offs.
+- Upgrade to P3 only when clear evidence shows advanced, non-obvious judgment and execution detail.
+- Keep scoring evidence-based and avoid harsh penalties for brevity.
 
 You MUST respond in valid JSON format:
 {

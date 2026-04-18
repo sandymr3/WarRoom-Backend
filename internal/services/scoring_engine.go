@@ -13,11 +13,20 @@ import (
 // Formula: Σ(Stage_Score × Stage_Weight) ÷ Total_Weight = Avg Competency Score
 // P1=1, P2=2, P3=3
 // Categories:
-//   2.7–3.0 = Natural Dominant
-//   2.3–2.69 = Strong
-//   2.0–2.29 = Functional
-//   1.6–1.99 = Development Required
-//   1.0–1.59 = High Risk
+//   2.55–3.0 = Advanced (P3)
+//   1.85–2.54 = Strong (P2)
+//   1.0–1.84 = Developing (P1)
+
+const (
+	ProficiencyMin      = 1.0
+	ProficiencyMax      = 3.0
+	CategoryStrongMin   = 1.85
+	CategoryAdvancedMin = 2.55
+
+	// Apply a mild neutral prior so early assessments do not look overly harsh.
+	neutralBaselineScore = 2.10
+	neutralPriorWeight   = 30.0
+)
 
 type ScoringEngine struct {
 	Config *models.SimulationConfig
@@ -183,7 +192,15 @@ func (se *ScoringEngine) CalculateCompetencyScores(
 		}
 
 		if totalWeight > 0 {
-			result.WeightedAverage = math.Round(totalWeightedScore/totalWeight*100) / 100
+			rawAverage := totalWeightedScore / totalWeight
+			blendedAverage := (rawAverage*totalWeight + neutralBaselineScore*neutralPriorWeight) / (totalWeight + neutralPriorWeight)
+			result.WeightedAverage = math.Round(blendedAverage*100) / 100
+			if result.WeightedAverage < ProficiencyMin {
+				result.WeightedAverage = ProficiencyMin
+			}
+			if result.WeightedAverage > ProficiencyMax {
+				result.WeightedAverage = ProficiencyMax
+			}
 		}
 		result.Category = ClassifyCompetency(result.WeightedAverage)
 
@@ -192,9 +209,9 @@ func (se *ScoringEngine) CalculateCompetencyScores(
 		result.Weaknesses = uniqueStrings(result.Weaknesses)
 
 		// Simple logic for KeyInsight based on score and trends
-		if result.WeightedAverage >= 2.7 {
+		if result.WeightedAverage >= CategoryAdvancedMin {
 			result.KeyInsight = "Exhibits exceptional mastery. Consistently makes high-impact decisions under pressure."
-		} else if result.WeightedAverage >= 2.0 {
+		} else if result.WeightedAverage >= CategoryStrongMin {
 			result.KeyInsight = "Strong and reliable performance. Minor blind spots exist under extreme stress."
 		} else {
 			result.KeyInsight = "Requires focused development. Performance is inconsistent when dealing with high-stakes scenarios."
@@ -227,9 +244,9 @@ func uniqueStrings(input []string) []string {
 // ClassifyCompetency maps a weighted average score to a category
 func ClassifyCompetency(avg float64) string {
 	switch {
-	case avg >= 2.7:
+	case avg >= CategoryAdvancedMin:
 		return "P3"
-	case avg >= 2.0:
+	case avg >= CategoryStrongMin:
 		return "P2"
 	default:
 		return "P1"
@@ -271,9 +288,9 @@ func ClassifyEntrepreneur(results map[string]*CompetencyResult) *EntrepreneurPro
 	hasP1UnderStress := false
 
 	for _, r := range results {
-		if r.WeightedAverage >= 2.7 {
+		if r.WeightedAverage >= CategoryAdvancedMin {
 			p3Count++
-		} else if r.WeightedAverage >= 2.0 {
+		} else if r.WeightedAverage >= CategoryStrongMin {
 			p2Count++
 		} else {
 			hasP1UnderStress = true
@@ -282,7 +299,7 @@ func ClassifyEntrepreneur(results map[string]*CompetencyResult) *EntrepreneurPro
 
 	allP2Min := true
 	for _, r := range results {
-		if r.WeightedAverage < 2.0 {
+		if r.WeightedAverage < CategoryStrongMin {
 			allP2Min = false
 			break
 		}

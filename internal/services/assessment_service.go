@@ -1879,7 +1879,7 @@ func (s *AssessmentService) generateActionPlan(ranked []*CompetencyResult) []map
 	// Focus on bottom 3 competencies
 	for i := len(ranked) - 1; i >= 0 && len(actions) < 3; i-- {
 		r := ranked[i]
-		if r.WeightedAverage < 2.7 { // Anything below Natural Dominant needs work
+		if r.WeightedAverage < CategoryAdvancedMin { // Anything below advanced benchmark needs work
 			actionText := fmt.Sprintf("Focus on developing %s through deliberate practice.", r.Name)
 			if g, ok := guideline[r.Code]; ok {
 				actionText = g
