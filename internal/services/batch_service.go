@@ -83,11 +83,13 @@ func (s *BatchService) ListBatches() ([]BatchWithCount, error) {
 		batchCodes[i] = b.Code
 	}
 
-	db.DB.Model(&models.User{}).
+	if err := db.DB.Model(&models.User{}).
 		Select("batch_code, count(*) as count").
 		Where("batch_code IN ? AND role = ?", batchCodes, "participant").
 		Group("batch_code").
-		Scan(&counts)
+		Scan(&counts).Error; err != nil {
+		return nil, err
+	}
 
 	countMap := make(map[string]int64)
 	for _, c := range counts {
