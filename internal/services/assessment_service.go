@@ -835,6 +835,27 @@ func getFloat(m map[string]interface{}, key string) float64 {
 	return 0
 }
 
+func extractFreeTextResponse(responseData json.RawMessage) string {
+	if len(responseData) == 0 {
+		return ""
+	}
+
+	var respMap map[string]interface{}
+	if err := json.Unmarshal(responseData, &respMap); err != nil {
+		return ""
+	}
+
+	if text, ok := respMap["text"].(string); ok {
+		return strings.TrimSpace(text)
+	}
+
+	if text, ok := respMap["response"].(string); ok {
+		return strings.TrimSpace(text)
+	}
+
+	return ""
+}
+
 // updateCompetencyScores updates the running competency scores for an assessment
 func (s *AssessmentService) updateCompetencyScores(assessmentID string, stageID string, competencies []string, proficiency int) {
 	s.BatchUpdateCompetencyScores(assessmentID, stageID, map[string][]int{stageID: {proficiency}}, competencies)
@@ -955,6 +976,19 @@ func (s *AssessmentService) GetAssessment(assessmentID string) (*AssessmentState
 	var assessment models.Assessment
 	if err := db.DB.Where("id = ?", assessmentID).First(&assessment).Error; err != nil {
 		return nil, errors.New("assessment not found")
+	}
+
+	if strings.TrimSpace(assessment.WarRoomPitch) == "" {
+		var prepPitchResponse models.Response
+		err := db.DB.Where("assessmentId = ? AND questionId = ?", assessmentID, "Q_WP_1").Order("createdAt DESC").First(&prepPitchResponse).Error
+		if err == nil {
+			if recoveredPitch := extractFreeTextResponse(prepPitchResponse.ResponseData); recoveredPitch != "" {
+				assessment.WarRoomPitch = recoveredPitch
+				db.DB.Model(&models.Assessment{}).Where("id = ?", assessmentID).Update("warRoomPitch", recoveredPitch)
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("[Assessment] failed to recover prep pitch for assessment %s: %v", assessmentID, err)
+		}
 	}
 
 	// Get current stage questions data
@@ -1258,6 +1292,33 @@ func (s *AssessmentService) SubmitStageResponses(assessmentID string, responses 
 		result.SimCompleted = true
 		assessment.Status = "COMPLETED"
 		assessment.CompletedAt = &now
+	}
+
+	if stageID == "STAGE_WARROOM_PREP" {
+		preparedPitch := extractFreeTextResponse(responses["Q_WP_1"])
+		if preparedPitch == "" {
+			for qID, respData := range responses {
+				question := s.DataManager.GetQuestion(qID)
+				if question == nil {
+					continue
+				}
+
+				isPitchTemplateQuestion := strings.EqualFold(strings.TrimSpace(question.Tag), "Pitch Template") ||
+					strings.Contains(strings.ToLower(question.Text), "fill in the pitch template")
+				if !isPitchTemplateQuestion {
+					continue
+				}
+
+				preparedPitch = extractFreeTextResponse(respData)
+				if preparedPitch != "" {
+					break
+				}
+			}
+		}
+
+		if preparedPitch != "" {
+			assessment.WarRoomPitch = preparedPitch
+		}
 	}
 
 	assessment.LastActiveAt = &now
