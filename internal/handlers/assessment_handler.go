@@ -115,6 +115,17 @@ func (h *AssessmentHandler) Create(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized: missing user ID in token"})
 	}
 
+	// Guard: verify the user's batch is still active before allowing a new assessment.
+	if err := h.Service.CheckBatchActive(userID); err != nil {
+		if err.Error() == "batch_disabled" {
+			return c.JSON(http.StatusForbidden, map[string]string{
+				"error": "Your batch has been disabled by the admin. Please contact your instructor to re-enable it before starting a new simulation.",
+			})
+		}
+		// Any other DB error — don't block, just log and proceed.
+		// (We'd rather allow than hard-fail on a lookup error during local dev.)
+	}
+
 	var req json.RawMessage
 	if err := c.Bind(&req); err != nil {
 		req = json.RawMessage(`{}`)

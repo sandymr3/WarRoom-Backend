@@ -155,6 +155,29 @@ func (s *AssessmentService) CreateAssessment(userID string, setupData json.RawMe
 	return assessment, nil
 }
 
+// CheckBatchActive verifies that the user's batch is still enabled.
+// Returns error("batch_disabled") when the batch exists but is inactive.
+// Returns nil if the batch is active, the user has no batch, or a DB error occurs (fail-open).
+func (s *AssessmentService) CheckBatchActive(userID string) error {
+	var user models.User
+	if err := db.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		return nil // fail-open: can't find user, let CreateAssessment handle it
+	}
+	if user.BatchCode == "" {
+		return nil // no batch attached — allow (admin or batch-less user)
+	}
+	var batch models.Batch
+	if err := db.DB.Where("code = ?", user.BatchCode).First(&batch).Error; err != nil {
+		return nil // fail-open: batch lookup error
+	}
+	if !batch.Active {
+		return errors.New("batch_disabled")
+	}
+	return nil
+}
+
+
+
 // ============================================
 // SUBMIT RESPONSE
 // ============================================
