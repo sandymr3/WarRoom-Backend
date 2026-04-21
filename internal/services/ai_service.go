@@ -315,7 +315,7 @@ func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 				return nil, fmt.Errorf("API request failed after %d retries: %w", maxRetries, errDo)
 			}
 			log.Printf("[AIService] Attempt %d failed: %v. Retrying...", i+1, errDo)
-			time.Sleep(time.Duration(1<<i) * time.Second)
+			time.Sleep(time.Duration(1<<uint(i)) * time.Second)
 			continue
 		}
 
@@ -327,16 +327,16 @@ func (ai *AIService) Call(messages []ChatMessage) (*AIResponse, error) {
 				return nil, fmt.Errorf("failed to read response after %d retries: %w", maxRetries, errDo)
 			}
 			log.Printf("[AIService] Attempt %d failed to read response. Retrying...", i+1)
-			time.Sleep(time.Duration(1<<i) * time.Second)
+			time.Sleep(time.Duration(1<<uint(i)) * time.Second)
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
 			errMsg := fmt.Sprintf("Gemini API error %d: %s", resp.StatusCode, string(respBody))
-			// Retry on 429 Too Many Requests or 500+ Server Errors
-			if (resp.StatusCode == 429 || resp.StatusCode >= 500) && i < maxRetries {
+			// Retry on 429 Too Many Requests or 503 Service Unavailable Errors
+			if (resp.StatusCode == 429 || resp.StatusCode == 503) && i < maxRetries {
 				log.Printf("[AIService] Retryable error on attempt %d: %s", i+1, errMsg)
-				time.Sleep(time.Duration(1<<i) * time.Second)
+				time.Sleep(time.Duration(1<<uint(i)) * time.Second)
 				continue
 			}
 			log.Printf("[AIService] %s", errMsg)
@@ -425,7 +425,7 @@ func (ai *AIService) CallWithAudio(systemPrompt string, userText string, audioBa
 				return nil, fmt.Errorf("API request failed after %d retries: %w", maxRetries, errDo)
 			}
 			log.Printf("[AIService] Audio call attempt %d failed: %v. Retrying...", i+1, errDo)
-			time.Sleep(time.Duration(1<<i) * time.Second)
+			time.Sleep(time.Duration(1<<uint(i)) * time.Second)
 			continue
 		}
 
@@ -436,17 +436,19 @@ func (ai *AIService) CallWithAudio(systemPrompt string, userText string, audioBa
 			if i == maxRetries {
 				return nil, fmt.Errorf("failed to read response after %d retries: %w", maxRetries, errDo)
 			}
-			time.Sleep(time.Duration(1<<i) * time.Second)
+			log.Printf("[AIService] Audio call attempt %d failed to read response. Retrying...", i+1)
+			time.Sleep(time.Duration(1<<uint(i)) * time.Second)
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
 			errMsg := fmt.Sprintf("Gemini API error %d: %s", resp.StatusCode, string(respBody))
-			if (resp.StatusCode == 429 || resp.StatusCode >= 500) && i < maxRetries {
+			if (resp.StatusCode == 429 || resp.StatusCode == 503) && i < maxRetries {
 				log.Printf("[AIService] Retryable error on attempt %d: %s", i+1, errMsg)
-				time.Sleep(time.Duration(1<<i) * time.Second)
+				time.Sleep(time.Duration(1<<uint(i)) * time.Second)
 				continue
 			}
+			log.Printf("[AIService] %s", errMsg)
 			return nil, fmt.Errorf("%s", errMsg)
 		}
 
