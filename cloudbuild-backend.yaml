@@ -30,7 +30,7 @@ images:
 
 substitutions:
   _RUN_MIGRATIONS: 'false'
-  _AI_MODEL: 'gemini-2.5-flash'
+  _AI_MODEL: 'gemini-2.5-flash-lite'
 
 options:
   logging: CLOUD_LOGGING_ONLY

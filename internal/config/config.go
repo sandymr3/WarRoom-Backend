@@ -28,7 +28,7 @@ func LoadConfig() *Config {
 		DatabaseURL:   getEnv("DATABASE_URL", "warroom.db"),
 		JWTSecret:     getEnv("JWT_SECRET", "super-secret-key"),
 		GeminiAPIKey:  getEnv("GEMINI_API_KEY", ""),
-		AIModel:       getEnv("AI_MODEL", "gemini-2.5-flash"),
+		AIModel:       getEnv("AI_MODEL", "gemini-2.5-flash-lite"),
 		RunMigrations: getEnv("RUN_MIGRATIONS", "true") == "true",
 	}
 }

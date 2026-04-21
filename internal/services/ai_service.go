@@ -31,7 +31,7 @@ func NewAIService() *AIService {
 
 	model := os.Getenv("AI_MODEL")
 	if model == "" {
-		model = "gemini-2.5-flash"
+		model = "gemini-2.5-flash-lite"
 	}
 
 	log.Printf("[AIService] Initialized with model: %s, API key set: %v", model, apiKey != "")
